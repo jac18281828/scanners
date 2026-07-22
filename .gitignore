@@ -23,3 +23,7 @@ Icon?
 # Misc
 *.swp
 *.orig
+
+# Orchestration bookkeeping — local only, not part of the shipped project
+/STATE.md
+/prompts/
