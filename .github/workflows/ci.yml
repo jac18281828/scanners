@@ -33,3 +33,39 @@ jobs:
 
       - name: swift-format lint
         run: swift-format lint --strict --configuration .swift-format --recursive Sources Tests Package.swift
+
+  sane-vendor:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure arm64 runner
+        run: |
+          arch="$(uname -m)"
+          echo "runner arch: $arch"
+          test "$arch" = "arm64"
+
+      - name: Install pkg-config
+        run: command -v pkg-config >/dev/null 2>&1 || brew install pkgconf
+
+      # Caches the downloaded, hash-verified source tarballs only (Vendor/.cache).
+      # build-sane.sh itself always runs — this is the fragile part of the
+      # pipeline (the --enable-preload patch), so every CI run re-verifies it
+      # actually builds; the cache just avoids re-fetching ~8MB from GitHub/
+      # GitLab on every run. Keyed on the build script's own hash, which
+      # embeds the pinned sane-backends/libusb versions and their SHA-256s —
+      # any version bump or hash change invalidates the cache automatically.
+      - name: Cache vendored source tarballs
+        uses: actions/cache@v4
+        with:
+          path: Vendor/.cache
+          key: sane-vendor-tarballs-${{ hashFiles('Scripts/build-sane.sh') }}
+
+      - name: Build vendored SANE stack
+        run: ./Scripts/build-sane.sh
+
+      - name: Smoke test (no hardware in CI — device assertion skipped)
+        env:
+          SANE_PROBE_SKIP_DEVICE_CHECK: "1"
+        run: ./Scripts/smoke-sane.sh

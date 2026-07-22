@@ -24,6 +24,12 @@ Icon?
 *.swp
 *.orig
 
+# Vendor: build artifacts only; README and patches are tracked (see Vendor/README.md)
+/Vendor/.cache/
+/Vendor/.build/
+/Vendor/lib/
+/Vendor/include/
+
 # Orchestration bookkeeping — local only, not part of the shipped project
 /STATE.md
 /prompts/

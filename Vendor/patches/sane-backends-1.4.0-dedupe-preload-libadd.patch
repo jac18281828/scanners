@@ -1,0 +1,49 @@
+Dedupe PRELOADABLE_BACKENDS_LIBS' sanei_usb.lo against libdll_preload.la (sane-backends 1.4.0)
+
+Upstream bug: backend/Makefile.am's libsane_la_LIBADD pulls in
+`libdll_preload.la` (whose own LIBADD already bundles ../sanei/sanei_usb.lo,
+$(USB_LIBS), $(XML_LIBS) -- see libdll_preload_la_LIBADD a few lines above)
+*and* the separate blanket PRELOADABLE_BACKENDS_LIBS list, which lists
+../sanei/sanei_usb.lo again. libtool inlines a convenience library's own
+LIBADD objects wherever that .la is linked in, so sanei_usb.lo's ~30 symbols
+(_sanei_usb_open, etc.) end up in the libsane.la link line twice, and both
+Apple's default ld and ld-classic reject that as duplicate symbols.
+
+Upstream's own comment admits the blanket list is wrong in general:
+
+    # FIXME: This is using every possibly needed library and dependency
+    # when the user is using any PRELOADABLE_BACKENDS, irrespective of
+    # what backends are preloaded.  It should include what is needed by
+    # those backends that are actually preloaded.
+
+This patch does the minimal fix for the concrete duplicate: drop the
+../sanei/sanei_usb.lo line from PRELOADABLE_BACKENDS_LIBS, since it is
+already supplied (once) via libdll_preload.la, which is unconditionally
+part of libsane_la_LIBADD regardless of which backends are preloaded. It
+does not otherwise touch the "kitchen sink" behavior the FIXME describes.
+
+Applies to both backend/Makefile.am (source) and backend/Makefile.in (the
+tarball's pre-generated file, which is what autotools actually build from
+in this environment -- see Vendor/README.md for why both are patched by
+hand instead of regenerating via autoreconf).
+
+--- a/backend/Makefile.am
++++ b/backend/Makefile.am
+@@ -2025,7 +2025,6 @@
+ if preloadable_backends_enabled
+ PRELOADABLE_BACKENDS_LIBS = \
+     ../sanei/sanei_config2.lo \
+-    ../sanei/sanei_usb.lo \
+     ../sanei/sanei_scsi.lo \
+     ../sanei/sanei_pv8630.lo \
+     ../sanei/sanei_pp.lo \
+--- a/backend/Makefile.in
++++ b/backend/Makefile.in
+@@ -4224,7 +4224,6 @@
+ # those backends that are actually preloaded.
+ @preloadable_backends_enabled_TRUE@PRELOADABLE_BACKENDS_LIBS = \
+ @preloadable_backends_enabled_TRUE@    ../sanei/sanei_config2.lo \
+-@preloadable_backends_enabled_TRUE@    ../sanei/sanei_usb.lo \
+ @preloadable_backends_enabled_TRUE@    ../sanei/sanei_scsi.lo \
+ @preloadable_backends_enabled_TRUE@    ../sanei/sanei_pv8630.lo \
+ @preloadable_backends_enabled_TRUE@    ../sanei/sanei_pp.lo \
