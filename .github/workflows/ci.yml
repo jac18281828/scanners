@@ -16,6 +16,28 @@ jobs:
       - name: Show Swift version
         run: swift --version
 
+      - name: Ensure arm64 runner
+        run: |
+          arch="$(uname -m)"
+          echo "runner arch: $arch"
+          test "$arch" = "arm64"
+
+      - name: Install pkg-config
+        run: command -v pkg-config >/dev/null 2>&1 || brew install pkgconf
+
+      # ScannerKit's CSane target links Vendor/lib and its module map reaches into
+      # Vendor/include (see Package.swift) — every `swift build`/`swift test` needs the
+      # vendored SANE stack present first, hardware or not. Same tarball cache as the
+      # sane-vendor job below; separate runner/VM, so it's rebuilt here too.
+      - name: Cache vendored source tarballs
+        uses: actions/cache@v4
+        with:
+          path: Vendor/.cache
+          key: sane-vendor-tarballs-${{ hashFiles('Scripts/build-sane.sh') }}
+
+      - name: Build vendored SANE stack
+        run: ./Scripts/build-sane.sh
+
       - name: Build
         run: swift build
 

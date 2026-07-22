@@ -1,0 +1,14 @@
+// CSane — module map over the vendored SANE headers (Vendor/include/sane).
+//
+// Vendor/include is a build artifact of Scripts/build-sane.sh (gitignored; see
+// Vendor/README.md), so this map reaches into it with a path relative to this file
+// rather than assuming any install location. `link "sane"` tells the linker to add
+// `-lsane` automatically wherever CSane is imported; the `-L`/`-rpath` needed to find
+// Vendor/lib's libsane.dylib at link and load time are supplied by ScannerKit's
+// linkerSettings in Package.swift.
+module CSane [system] {
+  header "../../Vendor/include/sane/sane.h"
+  header "../../Vendor/include/sane/saneopts.h"
+  link "sane"
+  export *
+}
