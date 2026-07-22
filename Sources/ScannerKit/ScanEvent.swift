@@ -26,6 +26,25 @@ public struct ScannedPage: @unchecked Sendable {
   public let requestedDPI: Int
   public let hardwareDPI: Int
   public let mode: ScanMode
+
+  /// Explicit public memberwise initializer — the synthesized one defaults to `internal`,
+  /// which would leave OutputKit (Phase 4) unable to construct a `ScannedPage` at all (e.g.
+  /// after resampling in `PageNormalizer`). Field set and meaning are unchanged from Phase 3.
+  public init(
+    image: CGImage,
+    widthMM: Double,
+    heightMM: Double,
+    requestedDPI: Int,
+    hardwareDPI: Int,
+    mode: ScanMode
+  ) {
+    self.image = image
+    self.widthMM = widthMM
+    self.heightMM = heightMM
+    self.requestedDPI = requestedDPI
+    self.hardwareDPI = hardwareDPI
+    self.mode = mode
+  }
 }
 
 /// Events published by `ScanSession.scan(config:)`, in order: exactly one `.started`, zero

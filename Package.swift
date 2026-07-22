@@ -39,11 +39,17 @@ let package = Package(
     ),
     .target(
       name: "OutputKit",
+      dependencies: ["ScannerKit"],
       swiftSettings: [.swiftLanguageMode(.v6)]
     ),
     .executableTarget(
       name: "scannerkit-cli",
       dependencies: ["ScannerKit"],
+      swiftSettings: [.swiftLanguageMode(.v6)]
+    ),
+    .executableTarget(
+      name: "outputkit-cli",
+      dependencies: ["ScannerKit", "OutputKit"],
       swiftSettings: [.swiftLanguageMode(.v6)]
     ),
     .testTarget(
@@ -53,7 +59,7 @@ let package = Package(
     ),
     .testTarget(
       name: "OutputKitTests",
-      dependencies: ["OutputKit"],
+      dependencies: ["OutputKit", "ScannerKit"],
       swiftSettings: [.swiftLanguageMode(.v6)]
     ),
   ]
