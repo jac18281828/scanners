@@ -89,6 +89,35 @@ Scanners.app
    affordance is a reasonable follow-up but not required for v1 if time-constrained (note
    in the phase report if deferred).
 
+   **Addendum (post-v0.1.0 bug fix): unconditional perspective correction was baking
+   detection noise in as fake rotation.** John reported real-hardware scans coming out
+   "rotated or crooked" post-crop even though the raw full-bed scan wasn't. Real-hardware
+   repro (HP ScanJet 4570c, a flat document already square on the platen) confirmed it:
+   `VNDetectDocumentSegmentationRequest` returned a confidently-detected (0.99) quad whose
+   top edge read +2.82° off horizontal but whose bottom edge read -0.31° — two corners
+   landed a few pixels apart on what turned out to be Vision's own coarse internal
+   quantization grid, not a real rotated rectangle (a true rotated rectangle has parallel
+   top/bottom edges; these disagreed by 3.1°). `CIPerspectiveCorrection` doesn't know the
+   difference — it forces whatever quad it's given into a rectangle, so that per-corner
+   noise came out as a visible, inconsistent shear in the cropped output (measured: text
+   baselines that read flat pre-crop, within ~0.15°, showed 0°–0.51° of *varying* tilt
+   post-crop — the hallmark of a keystone warp, not a uniform rotation).
+
+   Fix: `DocumentCropper` now estimates the quad's rotation by averaging all four edges'
+   implied angle (top, bottom, left-from-vertical, right-from-vertical) rather than reading
+   any single edge — real rotation has all four edges agree, so noise on one or two edges
+   mostly cancels out of the average while a genuine skew still survives it. On the
+   measured real-hardware case that average is 0.63°. Below `maximumNoiseRotationDegrees`
+   (2.0°, >3x that measured noise, still well under the tens-of-degrees a real skewed
+   document produces), `crop` snaps to the quad's plain axis-aligned bounding box instead
+   of running `CIPerspectiveCorrection` — no warp, because there's nothing real to correct.
+   Above it, perspective correction runs exactly as before. Re-scanning the same real
+   document post-fix: baseline tilt in the crop matches the pre-crop source again (~0.15°,
+   flat/consistent, not the 0°–0.51° varying shear from before). Physical-mm recomputation
+   post-crop (`widthMM`/`heightMM` from the corrected image's own pixel count) is unchanged
+   by this — it already worked from the corrected output image's dimensions regardless of
+   which correction path produced them.
+
 ## Product behavior
 
 - **Two modes.** Text: default 300dpi B&W; also color; dpi 75/150/300/600.
