@@ -9,9 +9,11 @@ excluded:
 # Curated opt-in set: correctness and safety rules that are off by default.
 # Deliberately excludes opt-in rules that fight swift-format's own style
 # (e.g. contrasted_opening_brace wants Allman braces; swift-format enforces
-# K&R) or that are purely stylistic bikeshedding (explicit_type_interface,
-# explicit_acl). Two formatters disagreeing on brace/type style is worse
-# than one strict tool being slightly less exhaustive.
+# K&R; pattern_matching_keywords wants `case let .foo(a, b)` where
+# swift-format's UseLetInEveryBoundCaseVariable wants `case .foo(let a, let b)`)
+# or that are purely stylistic bikeshedding (explicit_type_interface,
+# explicit_acl). Two formatters disagreeing on brace/type/binding style is
+# worse than one strict tool being slightly less exhaustive.
 opt_in_rules:
   - array_init
   - closure_end_indentation
@@ -39,7 +41,6 @@ opt_in_rules:
   - multiline_parameters
   - operator_usage_whitespace
   - overridden_super_call
-  - pattern_matching_keywords
   - prefer_self_type_over_type_of_self
   - private_action
   - redundant_nil_coalescing
