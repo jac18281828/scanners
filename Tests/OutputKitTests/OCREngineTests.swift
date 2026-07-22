@@ -19,10 +19,18 @@ struct OCREngineTests {
     return Double(matched) / Double(expectedWords.count)
   }
 
+  // Tests deliberately request `.fast` — see OCREngine.recognizeLines' doc comment: a
+  // GitHub Actions macOS runner took >20 minutes on `.accurate` and never produced a line
+  // of output before needing a manual cancellation (suspected CPU-only CoreML inference —
+  // Apple Silicon CI VMs don't pass through the Neural Engine). `.fast` is still real
+  // Vision inference (the code path is genuinely exercised), just a lighter model. Actual
+  // `.accurate` mode is validated for real by Scripts/smoke-output.sh against real
+  // hardware, where it took under a second per page.
+
   @Test("gray text-page fixture recognizes >= 95% of known words")
   func grayRecognitionMeetsBar() throws {
     let page = Fixtures.textPage(Self.knownText, dpi: 300, bilevel: false)
-    let lines = try OCREngine.recognizeLines(in: page.image)
+    let lines = try OCREngine.recognizeLines(in: page.image, recognitionLevel: .fast)
     let score = Self.wordMatchFraction(recognized: lines, expected: Self.knownText)
     #expect(score >= 0.95, "gray OCR word match was \(score), expected >= 0.95")
   }
@@ -30,7 +38,7 @@ struct OCREngineTests {
   @Test("bounding boxes are within the normalized 0...1 image space")
   func boundingBoxesAreNormalized() throws {
     let page = Fixtures.textPage(Self.knownText, dpi: 300, bilevel: false)
-    let lines = try OCREngine.recognizeLines(in: page.image)
+    let lines = try OCREngine.recognizeLines(in: page.image, recognitionLevel: .fast)
     #expect(!lines.isEmpty)
     for line in lines {
       #expect(line.boundingBox.minX >= 0 && line.boundingBox.maxX <= 1)
@@ -48,8 +56,8 @@ struct OCREngineTests {
     let grayPage = Fixtures.textPage(Self.knownText, dpi: 300, bilevel: false)
     let bilevelPage = Fixtures.textPage(Self.knownText, dpi: 300, bilevel: true)
 
-    let grayLines = try OCREngine.recognizeLines(in: grayPage.image)
-    let bilevelLines = try OCREngine.recognizeLines(in: bilevelPage.image)
+    let grayLines = try OCREngine.recognizeLines(in: grayPage.image, recognitionLevel: .fast)
+    let bilevelLines = try OCREngine.recognizeLines(in: bilevelPage.image, recognitionLevel: .fast)
 
     let grayScore = Self.wordMatchFraction(recognized: grayLines, expected: Self.knownText)
     let bilevelScore = Self.wordMatchFraction(recognized: bilevelLines, expected: Self.knownText)

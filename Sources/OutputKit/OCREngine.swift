@@ -27,11 +27,26 @@ public enum OCRError: Error, CustomStringConvertible, Sendable {
 /// `VNImageRequestHandler.perform` is called, so this whole call is blocking — callers on
 /// the main actor should hop off it first, same as any other CPU-bound Vision request.
 public enum OCREngine {
-  public static func recognizeLines(in image: CGImage) throws -> [OCRTextLine] {
+  /// `recognitionLevel`/`automaticallyDetectsLanguage` are exposed (rather than hardcoded)
+  /// so tests can request `.fast` — real usage (the app, `outputkit-cli`'s hardware smoke
+  /// test) keeps the phase-specified defaults (`.accurate`, autodetect on). This exists
+  /// because a GitHub Actions macOS runner's `.accurate` request took >20 minutes and never
+  /// produced a single line of test output before a manual cancellation was needed — Apple
+  /// Silicon CI runners are virtualized without Neural Engine passthrough, so CoreML falls
+  /// back to CPU-only inference; the heavier accurate-mode model is what's suspected to pay
+  /// for that, not a true infinite hang (unconfirmed — GitHub buffers a non-TTY child's
+  /// stdout until it exits, so no intermediate log output survived the cancellation to
+  /// prove which). `.fast` in CI keeps the code path genuinely exercised (real Vision
+  /// inference, not skipped) while bounding runtime.
+  public static func recognizeLines(
+    in image: CGImage,
+    recognitionLevel: VNRequestTextRecognitionLevel = .accurate,
+    automaticallyDetectsLanguage: Bool = true
+  ) throws -> [OCRTextLine] {
     let request = VNRecognizeTextRequest()
-    request.recognitionLevel = .accurate
+    request.recognitionLevel = recognitionLevel
     request.usesLanguageCorrection = true
-    request.automaticallyDetectsLanguage = true
+    request.automaticallyDetectsLanguage = automaticallyDetectsLanguage
 
     let handler = VNImageRequestHandler(cgImage: image, options: [:])
     do {

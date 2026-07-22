@@ -4,6 +4,7 @@ import Foundation
 import ImageIO
 import ScannerKit
 import UniformTypeIdentifiers
+import Vision
 
 public enum PDFBuilderError: Error, CustomStringConvertible, Sendable {
   case contextCreationFailed
@@ -60,7 +61,16 @@ public final class PDFBuilder {
   /// true` for text-mode pages (DESIGN.md's "Text" product mode) to run Vision OCR and draw
   /// recognized lines in invisible text mode over the image, at their own bounding boxes —
   /// searchable/selectable in Preview.app without changing what's visible.
-  public func append(page: ScannedPage, includeOCRTextLayer: Bool = false) throws {
+  ///
+  /// `ocrRecognitionLevel`/`ocrAutomaticallyDetectsLanguage` forward to `OCREngine` — see
+  /// its doc comment for why they're not hardcoded to the phase-specified `.accurate` /
+  /// autodetect-on defaults (which this method still uses unless overridden).
+  public func append(
+    page: ScannedPage,
+    includeOCRTextLayer: Bool = false,
+    ocrRecognitionLevel: VNRequestTextRecognitionLevel = .accurate,
+    ocrAutomaticallyDetectsLanguage: Bool = true
+  ) throws {
     guard let context, !finished else {
       throw PDFBuilderError.contextCreationFailed
     }
@@ -82,7 +92,11 @@ public final class PDFBuilder {
     context.draw(embeddedImage, in: CGRect(x: 0, y: 0, width: widthPt, height: heightPt))
 
     if includeOCRTextLayer {
-      let lines = try OCREngine.recognizeLines(in: normalized.image)
+      let lines = try OCREngine.recognizeLines(
+        in: normalized.image,
+        recognitionLevel: ocrRecognitionLevel,
+        automaticallyDetectsLanguage: ocrAutomaticallyDetectsLanguage
+      )
       drawInvisibleText(lines, context: context, pageWidthPt: widthPt, pageHeightPt: heightPt)
     }
 

@@ -9,6 +9,13 @@ on:
 jobs:
   build-and-test:
     runs-on: macos-15
+    # Belt-and-suspenders after a real incident: Phase 4's first CI push hung on the Test
+    # step for 20+ minutes with zero output and needed a manual cancellation (suspected
+    # CoreML/Vision falling back to CPU-only inference with no Neural Engine passthrough on
+    # this VM — see OCREngine.recognizeLines' doc comment; tests now request `.fast` to
+    # avoid it). If something regresses that bound, fail loud and bounded instead of hanging
+    # until a human notices and cancels it by hand.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4

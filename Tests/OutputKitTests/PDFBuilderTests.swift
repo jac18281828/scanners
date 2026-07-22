@@ -48,9 +48,13 @@ struct PDFBuilderTests {
 
   @Test("OCR text layer: recognized text is extractable via PDFKit's page.string")
   func ocrTextIsExtractable() throws {
+    // .fast, not .accurate — see OCREngine.recognizeLines' doc comment (a GH Actions macOS
+    // runner hung for >20 minutes on .accurate with zero output; suspected no Neural Engine
+    // passthrough in the CI VM). Scripts/smoke-output.sh validates real .accurate behavior
+    // against actual hardware.
     let page = Fixtures.textPage("HELLO WORLD 2026", dpi: 300, bilevel: false)
     let builder = try PDFBuilder()
-    try builder.append(page: page, includeOCRTextLayer: true)
+    try builder.append(page: page, includeOCRTextLayer: true, ocrRecognitionLevel: .fast)
     let data = builder.finish()
     let document = try #require(PDFDocument(data: data))
     let extracted = try #require(document.page(at: 0)).string ?? ""
@@ -64,9 +68,14 @@ struct PDFBuilderTests {
     // — near the bottom third. If the invisible layer were y-flipped, a selection rect
     // covering the *bottom* of the page would land on nothing (the flipped copy would sit
     // near the top instead), and one covering the *top* would find the text instead.
+    // Position-only check, deliberately accuracy-agnostic: .fast mode (see the comment
+    // above) can misread a character here and there ("BOTTOMTEXT" -> "BOTHOMTEXT" was seen
+    // during development) without that being a positioning bug. So this asserts *something*
+    // substantial was recognized at the bottom and *nothing* at the top, rather than
+    // matching the exact string.
     let page = Fixtures.textPage("BOTTOMTEXT", dpi: 300, bilevel: false)
     let builder = try PDFBuilder()
-    try builder.append(page: page, includeOCRTextLayer: true)
+    try builder.append(page: page, includeOCRTextLayer: true, ocrRecognitionLevel: .fast)
     let data = builder.finish()
     let document = try #require(PDFDocument(data: data))
     let pdfPage = try #require(document.page(at: 0))
@@ -77,11 +86,18 @@ struct PDFBuilderTests {
     let topThird = CGRect(
       x: 0, y: bounds.height * 0.5, width: bounds.width, height: bounds.height * 0.5)
 
-    let bottomSelection = pdfPage.selection(for: bottomThird)?.string?.uppercased() ?? ""
-    let topSelection = pdfPage.selection(for: topThird)?.string?.uppercased() ?? ""
+    let bottomSelection =
+      pdfPage.selection(for: bottomThird)?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+      ?? ""
+    let topSelection =
+      pdfPage.selection(for: topThird)?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+      ?? ""
 
-    #expect(bottomSelection.contains("BOTTOMTEXT"))
-    #expect(!topSelection.contains("BOTTOMTEXT"))
+    #expect(
+      bottomSelection.count >= 8,
+      "expected most of BOTTOMTEXT's 10 chars, got \(bottomSelection.debugDescription)")
+    #expect(
+      topSelection.isEmpty, "expected no text at the top, got \(topSelection.debugDescription)")
   }
 
   @Test("finish() can only be called once meaningfully; append after finish throws")
