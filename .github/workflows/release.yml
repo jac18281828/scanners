@@ -1,0 +1,125 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    # Same "fail loud, not hang for hours" belt-and-suspenders as ci.yml's
+    # build-and-test job (see that file's comment for the Vision/.accurate incident this
+    # guards against). This job doesn't run OCR tests, but it does an unbounded-ish
+    # notarization wait when Developer ID secrets are present, so keep a generous but
+    # bounded ceiling.
+    timeout-minutes: 30
+    env:
+      HAS_SIGNING_SECRETS: ${{ secrets.MACOS_CERT_P12 != '' && secrets.MACOS_CERT_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+      HAS_NOTARY_SECRETS: ${{ secrets.NOTARY_APPLE_ID != '' && secrets.NOTARY_APP_PASSWORD != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Ensure arm64 runner
+        run: |
+          arch="$(uname -m)"
+          echo "runner arch: $arch"
+          test "$arch" = "arm64"
+
+      - name: Install pkg-config
+        run: command -v pkg-config >/dev/null 2>&1 || brew install pkgconf
+
+      - name: Cache vendored source tarballs
+        uses: actions/cache@v4
+        with:
+          path: Vendor/.cache
+          key: sane-vendor-tarballs-${{ hashFiles('Scripts/build-sane.sh') }}
+
+      - name: Build vendored SANE stack
+        run: ./Scripts/build-sane.sh
+
+      # ----------------------------------------------------------------------
+      # Signing identity: ad-hoc unless Developer ID secrets are present
+      # (DESIGN.md decision #8). This keeps the workflow green today with zero
+      # secrets configured, and switches to the real signing path with no
+      # workflow rewrite once MACOS_CERT_P12/MACOS_CERT_PASSWORD/APPLE_TEAM_ID
+      # are added as repo secrets.
+      # ----------------------------------------------------------------------
+      - name: Import Developer ID certificate
+        if: env.HAS_SIGNING_SECRETS == 'true'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$MACOS_CERT_PASSWORD" -A \
+            -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/"//g')
+
+          rm -f "$CERT_PATH"
+
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.*)"/\1/')"
+          if [[ -z "$IDENTITY" ]]; then
+            echo "error: no 'Developer ID Application' identity found in imported cert" >&2
+            exit 1
+          fi
+          echo "CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: make-app.sh
+        run: ./Scripts/make-app.sh
+
+      - name: Notarize + staple
+        if: env.HAS_SIGNING_SECRETS == 'true' && env.HAS_NOTARY_SECRETS == 'true'
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_APP_PASSWORD: ${{ secrets.NOTARY_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          ditto -c -k --keepParent build/Scanners.app "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --apple-id "$NOTARY_APPLE_ID" \
+            --password "$NOTARY_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple build/Scanners.app
+          rm -f "$RUNNER_TEMP/notarize.zip"
+
+      - name: make-dist.sh
+        run: ./Scripts/make-dist.sh
+
+      - name: Determine version
+        id: version
+        run: |
+          raw="$(git describe --tags --always)"
+          echo "version=${raw#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          zip_path="build/Scanners-${{ steps.version.outputs.version }}-arm64.zip"
+          test -f "$zip_path"
+          gh release create "${{ github.ref_name }}" "$zip_path" \
+            --title "Scanners ${{ github.ref_name }}" \
+            --generate-notes

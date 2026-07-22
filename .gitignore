@@ -30,6 +30,9 @@ Icon?
 /Vendor/lib/
 /Vendor/include/
 
+# Scripts/make-app.sh + Scripts/make-dist.sh output (the assembled .app and dist zip)
+/build/
+
 # Orchestration bookkeeping — local only, not part of the shipped project
 /STATE.md
 /prompts/
