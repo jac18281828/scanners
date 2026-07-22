@@ -6,7 +6,7 @@ extension MockSane {
   func optionDescriptors(_ handle: SaneHandle) throws -> [SaneOptionDescriptorRecord] {
     let bedW = configuration.bedWidthMM
     let bedH = configuration.bedHeightMM
-    return [
+    var descriptors = [
       stringOption(.mode, name: "mode", title: "Scan mode", values: ["Gray", "Color", "Lineart"]),
       stringOption(.source, name: "source", title: "Scan source", values: ["Flatbed", "ADF"]),
       resolutionOption(),
@@ -15,6 +15,29 @@ extension MockSane {
       rangeOption(.bottomRightX, name: "br-x", title: "Bottom-right x", max: bedW),
       rangeOption(.bottomRightY, name: "br-y", title: "Bottom-right y", max: bedH),
     ]
+    if configuration.includesLampTimeoutOption {
+      descriptors.append(
+        boolOption(.lampTimeout, name: "extend-lamp-timeout", title: "Extend lamp timeout"))
+    }
+    return descriptors
+  }
+
+  private func boolOption(
+    _ index: OptionIndex,
+    name: String,
+    title: String
+  ) -> SaneOptionDescriptorRecord {
+    SaneOptionDescriptorRecord(
+      index: index.rawValue,
+      name: name,
+      title: title,
+      type: .bool,
+      unit: .none,
+      size: 4,
+      isActive: true,
+      isSettable: true,
+      constraint: .none
+    )
   }
 
   private func resolutionOption() -> SaneOptionDescriptorRecord {
@@ -103,7 +126,18 @@ extension MockSane {
       return try setStringOption(index: index, value: value)
     case .topLeftX, .topLeftY, .bottomRightX, .bottomRightY:
       return try setFixedOption(index: index, value: value)
+    case .lampTimeout:
+      return try setBoolOption(index: index, value: value)
     }
+  }
+
+  private func setBoolOption(index: Int32, value: SaneOptionValue) throws -> SaneSetOptionResult {
+    guard case .bool = value else {
+      throw SaneCallFailure(
+        status: .invalid, context: "setOption(\(index))", message: "expected bool")
+    }
+    optionValues[index] = value
+    return .exact
   }
 
   /// Snaps a requested dpi to the nearest value the simulated hardware actually supports

@@ -11,6 +11,16 @@ import Vision
 public struct OCRTextLine: Sendable, Equatable {
   public let text: String
   public let boundingBox: CGRect
+
+  /// Explicit public memberwise initializer — the synthesized one defaults to `internal`
+  /// for a `public` type, same reasoning as `ScannerKit.ScannedPage`'s own explicit public
+  /// init: Phase 5's `ScanController` runs OCR on a background task ahead of Save and needs
+  /// to hand `OCRTextLine` values around (and its tests need to construct canned ones
+  /// without touching Vision at all) without reaching for `@testable import`.
+  public init(text: String, boundingBox: CGRect) {
+    self.text = text
+    self.boundingBox = boundingBox
+  }
 }
 
 public enum OCRError: Error, CustomStringConvertible, Sendable {

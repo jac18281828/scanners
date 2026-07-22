@@ -68,11 +68,23 @@ public final class PDFBuilder {
   /// defaults to `.accurate` but must be overridden to `.fast` by any CI-run test that
   /// exercises this with `includeOCRTextLayer: true` (no Neural Engine passthrough on
   /// GitHub's macOS runners — `.accurate` hangs there).
+  ///
+  /// `precomputedOCRLines`, when non-nil, is drawn as-is instead of calling
+  /// `OCREngine.recognizeLines` here. Phase 5's product flow runs OCR per-page in the
+  /// background between scans (DESIGN.md's PDF flow: "Save is instant") — the caller
+  /// normalizes the page and calls `OCREngine.recognizeLines` itself ahead of time, then
+  /// hands the result back in here at Save time so this call never blocks on Vision.
+  /// Callers must run that background OCR against `PageNormalizer.normalize(page)`, the
+  /// same image this method embeds — Vision's bounding boxes are fractional (0...1) so they
+  /// stay valid across the resample, but the recognized *text* only matches what this
+  /// method would have produced itself if OCR ran against the same pixels. `nil` (the
+  /// default) preserves the original behavior: OCR runs synchronously, right here.
   public func append(
     page: ScannedPage,
     includeOCRTextLayer: Bool = false,
     ocrLanguage: String = "en-US",
-    ocrRecognitionLevel: VNRequestTextRecognitionLevel = .accurate
+    ocrRecognitionLevel: VNRequestTextRecognitionLevel = .accurate,
+    precomputedOCRLines: [OCRTextLine]? = nil
   ) throws {
     guard let context, !finished else {
       throw PDFBuilderError.contextCreationFailed
@@ -95,8 +107,10 @@ public final class PDFBuilder {
     context.draw(embeddedImage, in: CGRect(x: 0, y: 0, width: widthPt, height: heightPt))
 
     if includeOCRTextLayer {
-      let lines = try OCREngine.recognizeLines(
-        in: normalized.image, language: ocrLanguage, recognitionLevel: ocrRecognitionLevel)
+      let lines =
+        try precomputedOCRLines
+        ?? OCREngine.recognizeLines(
+          in: normalized.image, language: ocrLanguage, recognitionLevel: ocrRecognitionLevel)
       drawInvisibleText(lines, context: context, pageWidthPt: widthPt, pageHeightPt: heightPt)
     }
 

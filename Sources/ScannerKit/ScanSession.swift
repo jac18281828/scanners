@@ -23,6 +23,7 @@ public struct ScanSession: Sendable {
     static let mode = "mode"
     static let source = "source"
     static let resolution = "resolution"
+    static let extendLampTimeout = "extend-lamp-timeout"
     static let topLeftX = "tl-x"
     static let topLeftY = "tl-y"
     static let bottomRightX = "br-x"
@@ -173,6 +174,16 @@ public struct ScanSession: Sendable {
       _ = try await runner.run {
         try backend.setOption(
           handle, index: sourceOption.index, value: .string(config.source.saneSourceName))
+      }
+    }
+
+    // Lamp timeout is optional too — only the real hp5590 exposes `extend-lamp-timeout`
+    // today (confirmed via `scanimage -A`); MockSane and any future backend without it are
+    // left alone rather than erroring, same pattern as `source` above.
+    if let lampOption = index(named: OptionName.extendLampTimeout) {
+      _ = try await runner.run {
+        try backend.setOption(
+          handle, index: lampOption.index, value: .bool(config.extendLampTimeout))
       }
     }
 

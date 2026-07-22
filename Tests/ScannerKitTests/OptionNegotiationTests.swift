@@ -116,4 +116,40 @@ struct OptionNegotiationTests {
     #expect(info.widthPixels == 200)
     #expect(info.heightPixels == 100)
   }
+
+  @Test("lamp timeout is negotiated onto the device when it exposes the option")
+  func lampTimeoutSetWhenSupported() async throws {
+    var configuration = MockSane.Configuration.default
+    configuration.includesLampTimeoutOption = true
+    let mock = MockSane(configuration: configuration)
+    let session = makeSession(mock: mock)
+    let config = ScanConfiguration(mode: .gray, requestedDPI: 100, extendLampTimeout: true)
+
+    for try await _ in session.scan(config: config) {}
+
+    let value = try mock.getOption(
+      SaneHandle(raw: 0), index: MockSane.OptionIndex.lampTimeout.rawValue)
+    #expect(value == .bool(true))
+  }
+
+  @Test(
+    "lamp timeout negotiation is silently skipped, not an error, when the device has no such option"
+  )
+  func lampTimeoutSkippedWhenUnsupported() async throws {
+    // Default MockSane configuration has no extend-lamp-timeout option, same as most SANE
+    // backends other than the real hp5590 — negotiateOptions must tolerate that exactly
+    // like it already does for `source`.
+    let mock = MockSane()
+    let session = makeSession(mock: mock)
+    let config = ScanConfiguration(mode: .gray, requestedDPI: 100, extendLampTimeout: true)
+
+    var sawStarted: ScanParametersInfo?
+    for try await event in session.scan(config: config) {
+      if case .started(let info) = event {
+        sawStarted = info
+      }
+    }
+
+    #expect(sawStarted != nil)
+  }
 }

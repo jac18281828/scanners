@@ -56,12 +56,23 @@ public struct ScanConfiguration: Sendable, Equatable {
   public var source: ScanSource
   public var area: ScanArea?
 
+  /// Negotiates the hp5590's `extend-lamp-timeout` SANE option when the device exposes it
+  /// (verified via `scanimage -A` on real hardware: `--extend-lamp-timeout[=(yes|no)] [no]`
+  /// — extends the lamp's auto-off from 15 minutes to 1 hour). Optional at negotiation time
+  /// the same way `source` is: devices/mock scenarios without the option are left alone
+  /// rather than erroring. Default `false` matches the hardware's own default and preserves
+  /// prior `ScanConfiguration` call sites unchanged. Phase 5's Settings pane surfaces this
+  /// as the "lamp-timeout toggle" DESIGN.md's product-behavior section calls for.
+  public var extendLampTimeout: Bool
+
   public init(
-    mode: ScanMode, requestedDPI: Int, source: ScanSource = .flatbed, area: ScanArea? = nil
+    mode: ScanMode, requestedDPI: Int, source: ScanSource = .flatbed, area: ScanArea? = nil,
+    extendLampTimeout: Bool = false
   ) {
     self.mode = mode
     self.requestedDPI = requestedDPI
     self.source = source
     self.area = area
+    self.extendLampTimeout = extendLampTimeout
   }
 }

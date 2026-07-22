@@ -62,5 +62,10 @@ let package = Package(
       dependencies: ["OutputKit", "ScannerKit"],
       swiftSettings: [.swiftLanguageMode(.v6)]
     ),
+    .testTarget(
+      name: "ScannersAppTests",
+      dependencies: ["ScannersApp", "ScannerKit", "OutputKit"],
+      swiftSettings: [.swiftLanguageMode(.v6)]
+    ),
   ]
 )

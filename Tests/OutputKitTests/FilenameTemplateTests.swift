@@ -59,6 +59,13 @@ struct FilenameTemplateTests {
     #expect(name == "scan-2026-07-22-001.jpg")
   }
 
+  @Test("a custom prefix replaces the default 'scan', date/sequence shape unchanged")
+  func customPrefixHonored() throws {
+    let name = try FilenameTemplate.nextFilename(
+      date: Self.date(2026, 7, 22), ext: "pdf", existingFilenames: [], prefix: "invoice")
+    #expect(name == "invoice-2026-07-22-001.pdf")
+  }
+
   @Test("exhausted sequence throws rather than silently colliding")
   func exhaustedSequenceThrows() {
     var existing = Set<String>()

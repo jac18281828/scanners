@@ -36,9 +36,7 @@ opt_in_rules:
   - legacy_multiple
   - literal_expression_end_indentation
   - modifier_order
-  - multiline_arguments
   - multiline_function_chains
-  - multiline_parameters
   - operator_usage_whitespace
   - overridden_super_call
   - prefer_self_type_over_type_of_self
@@ -63,6 +61,15 @@ disabled_rules:
   - todo
   # We rely on swift-format for line length; avoid two tools disagreeing on the limit.
   - line_length
+  # Same class of conflict as the opt_in_rules comment above, discovered in Phase 5:
+  # swift-format's own greedy line-wrapping for a signature that doesn't fit on one line
+  # packs as many parameters/arguments per line as fit under the 100-col limit rather than
+  # putting either all of them on one line or exactly one per line, and for a signature
+  # whose return type itself wraps, it puts the opening brace on its own line rather than
+  # trailing the declaration. multiline_arguments/multiline_parameters (opt-in, so simply
+  # left out above) and opening_brace (a SwiftLint default, so disabled here) all assume a
+  # formatting convention swift-format doesn't actually follow.
+  - opening_brace
 
 analyzer_rules:
   - unused_import

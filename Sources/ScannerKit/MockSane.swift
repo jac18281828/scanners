@@ -24,6 +24,11 @@ final class MockSane: SaneBackend, @unchecked Sendable {
     /// window to reliably cancel mid-scan. Zero for every other test, so the suite stays
     /// fast.
     var readDelay: TimeInterval
+    /// Whether the simulated device exposes an `extend-lamp-timeout` bool option, mirroring
+    /// the real hp5590 (confirmed via `scanimage -A`). Off by default — most negotiation
+    /// tests don't care about it, matching the "device without this option" case
+    /// `ScanSession.negotiateOptions` must tolerate.
+    var includesLampTimeoutOption: Bool = false
 
     static let `default` = Configuration(
       devices: [
@@ -50,6 +55,7 @@ final class MockSane: SaneBackend, @unchecked Sendable {
     case topLeftY = 5
     case bottomRightX = 6
     case bottomRightY = 7
+    case lampTimeout = 8
   }
 
   // Not `private`: shared with the MockSane+Options.swift / MockSane+Scanning.swift
@@ -75,6 +81,7 @@ final class MockSane: SaneBackend, @unchecked Sendable {
       OptionIndex.topLeftY.rawValue: .fixed(0),
       OptionIndex.bottomRightX.rawValue: .fixed(configuration.bedWidthMM),
       OptionIndex.bottomRightY.rawValue: .fixed(configuration.bedHeightMM),
+      OptionIndex.lampTimeout.rawValue: .bool(false),
     ]
   }
 

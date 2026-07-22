@@ -96,6 +96,42 @@ struct PDFBuilderTests {
       topSelection.isEmpty, "expected no text at the top, got \(topSelection.debugDescription)")
   }
 
+  @Test(
+    "precomputedOCRLines are drawn as-is and never invoke Vision -- Phase 5's background-OCR-before-Save path"
+  )
+  func precomputedOCRLinesAreUsedVerbatim() throws {
+    // No `dpi:`/`recognitionLevel:` knobs here at all: unlike every other OCR test in this
+    // file, this one never calls into Vision (OCREngine.recognizeLines) -- it hands
+    // PDFBuilder a canned line directly, the same way ScanController's background OCR task
+    // will after a scan completes. If PDFBuilder ever stopped honoring
+    // `precomputedOCRLines` and fell through to running OCR itself, this text (which was
+    // never rendered as pixels anywhere in this fixture) would not appear in the extracted
+    // PDF text, and the assertion below would fail.
+    let size = Fixtures.PageSize(
+      widthPixels: 850, heightPixels: 1100, widthMM: 215.9, heightMM: 279.4)
+    let page = Fixtures.solidPage(size: size, requestedDPI: 100, hardwareDPI: 100, mode: .gray)
+    // A modest box (not a hand-picked huge fraction of the page) so the synthetic font size
+    // stays text-sized rather than needing extreme horizontal squeeze to fit -- same order
+    // of magnitude as what real Vision output produces for a short single word.
+    let canned = [
+      OCRTextLine(
+        text: "PRECOMPUTEDSENTINEL", boundingBox: CGRect(x: 0.1, y: 0.4, width: 0.35, height: 0.03))
+    ]
+
+    let builder = try PDFBuilder()
+    try builder.append(page: page, includeOCRTextLayer: true, precomputedOCRLines: canned)
+    let data = builder.finish()
+
+    let document = try #require(PDFDocument(data: data))
+    let extracted = try #require(document.page(at: 0)).string ?? ""
+    // Whitespace-insensitive: PDFKit's extraction of a horizontally-scaled invisible
+    // CTLine (same drawInvisibleText path the other OCR-layer tests exercise) can insert
+    // extra spacing between glyphs — see e.g. "OCR text layer: recognized text is
+    // extractable" above, which only asserts word-level substrings for the same reason.
+    let collapsed = extracted.filter { !$0.isWhitespace }
+    #expect(collapsed.contains("PRECOMPUTEDSENTINEL"))
+  }
+
   @Test("finish() can only be called once meaningfully; append after finish throws")
   func appendAfterFinishThrows() throws {
     let builder = try PDFBuilder()

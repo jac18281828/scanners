@@ -74,6 +74,20 @@ Scanners.app
    `MACOS_CERT_P12`/`MACOS_CERT_PASSWORD`/`APPLE_TEAM_ID` secrets exist, then it switches to
    Developer ID + notarization with no workflow rewrite. README documents the one-time
    Gatekeeper right-click-open for ad-hoc builds.
+9. **⚠ Auto-crop to detected document edges via `VNDetectDocumentSegmentationRequest`.**
+   Full-bed scans include the platen/lid background around the actual document — surfaced
+   by hands-on Phase 5 testing. Vision's document-segmentation request (already used for
+   OCR elsewhere in OutputKit) detects the document's quadrilateral within the full-bed
+   image; OutputKit crops to it (perspective-corrected to a rectangle) and recomputes
+   `widthMM`/`heightMM` proportionally from the crop region against the original full-bed
+   physical size, so PDF page sizing (decision from "PDF assembly" — true-size printing)
+   stays correct post-crop. Pure CGImage-in/CGImage-out, no hardware dependency, testable
+   with synthetic fixtures (a rendered "document" rect on a contrasting background) same as
+   OCREngine. **Fallback: if no document boundary is detected (blank bed, low contrast,
+   detection failure), keep the full, uncropped bed scan rather than fail or guess** — never
+   block a scan on this. The UI shows the auto-cropped result; a manual override/adjust
+   affordance is a reasonable follow-up but not required for v1 if time-constrained (note
+   in the phase report if deferred).
 
 ## Product behavior
 

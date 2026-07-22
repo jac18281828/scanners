@@ -25,16 +25,22 @@ public enum FilenameTemplate {
   /// Returns the next non-colliding filename for `date`, e.g. `scan-2026-07-22-001.pdf`.
   /// `existingFilenames` should be exactly what's in the target directory (any casing,
   /// full names with extensions) — compared verbatim, so pass the real directory listing.
+  ///
+  /// `prefix` replaces the leading `scan` (default, unchanged from prior behavior) — Phase
+  /// 5's Settings pane exposes this as the "filename template" DESIGN.md's product-behavior
+  /// section calls for. The `{date}-{seq}` shape itself isn't user-customizable, only the
+  /// prefix in front of it.
   public static func nextFilename(
     date: Date = Date(),
     ext: String,
     existingFilenames: Set<String>,
     calendar: Calendar = .current,
-    timeZone: TimeZone = TimeZone(identifier: "UTC")!
+    timeZone: TimeZone = TimeZone(identifier: "UTC")!,
+    prefix: String = "scan"
   ) throws -> String {
     let dateString = formattedDate(date, calendar: calendar, timeZone: timeZone)
     for sequence in 1...maxSequence {
-      let candidate = filename(date: dateString, sequence: sequence, ext: ext)
+      let candidate = filename(date: dateString, sequence: sequence, ext: ext, prefix: prefix)
       if !existingFilenames.contains(candidate) {
         return candidate
       }
@@ -42,9 +48,9 @@ public enum FilenameTemplate {
     throw TemplateError.sequenceExhausted(date: dateString)
   }
 
-  private static func filename(date: String, sequence: Int, ext: String) -> String {
+  private static func filename(date: String, sequence: Int, ext: String, prefix: String) -> String {
     let paddedSequence = String(format: "%0\(sequenceDigits)d", sequence)
-    return "scan-\(date)-\(paddedSequence).\(ext)"
+    return "\(prefix)-\(date)-\(paddedSequence).\(ext)"
   }
 
   private static func formattedDate(
