@@ -21,9 +21,17 @@ struct DocumentExporterTests {
 
   @Test("buildPDFData produces one PDF page per scanned page, in session order")
   func buildPDFDataProducesOnePagePerScannedPage() throws {
-    let session = DocumentSession(documentMode: .image)  // no OCR layer -- keeps this fast
-    session.addPage(TestFixtures.solidPage())
-    session.addPage(TestFixtures.solidPage())
+    // .text, not .image: DocumentSession.addPage replaces rather than accumulates in Image
+    // mode (Finding 1's fix -- a session only ever has one Image-mode page), so a
+    // multi-page assembly test needs Text mode's append behavior. Each page gets an empty
+    // *precomputed* OCR result before building, so buildPDFData's `includeOCRTextLayer`
+    // path never actually calls into Vision here -- this test is about PDF page-count/
+    // ordering, not OCR, and has no business paying Vision's cost or CI-hang risk.
+    let session = DocumentSession(documentMode: .text)
+    let first = session.addPage(TestFixtures.solidPage())
+    let second = session.addPage(TestFixtures.solidPage())
+    session.setOCRResult([], for: first.id)
+    session.setOCRResult([], for: second.id)
     let settings = AppSettings(defaults: TestFixtures.isolatedDefaults())
 
     let data = try DocumentExporter.buildPDFData(session: session, settings: settings)
@@ -86,21 +94,38 @@ struct DocumentExporterTests {
   }
 
   @Test(
-    "imagePageToExport is the most recently scanned page, not the session's first page (regression: found via manual UI testing that switching Text -> Image mid-session left Save Image exporting a stale page)"
+    "imagePageToExport is the most recently scanned page after a confirmed mode switch, never a stale page from the prior mode (regression: found via manual UI testing that switching Text -> Image mid-session left Save Image exporting a stale page)"
   )
   func imagePageToExportUsesMostRecentPage() {
     let session = DocumentSession(documentMode: .text)
-    let textPage = session.addPage(TestFixtures.solidPage(mode: .blackAndWhite))
+    session.addPage(TestFixtures.solidPage(mode: .blackAndWhite))
 
-    // Simulate the exact scenario the manual checklist hit: switch to Image mode without a
-    // ⌘N reset, then scan -- the earlier Text-mode page is still sitting in session.pages.
-    session.documentMode = .image
+    // The exact scenario the manual checklist hit: switch to Image mode mid-session, then
+    // scan. `requestModeChange` (Finding 1's fix) clears the old Text-mode page as part of
+    // a confirmed mode switch, so there's nothing stale left for `.last` to have to skip
+    // past -- this asserts the end-to-end result (only the new page is ever exportable),
+    // not just the mechanism.
+    let switched = session.requestModeChange(to: .image, confirmDiscard: { true })
+    #expect(switched)
+    #expect(session.pages.isEmpty)
     let imagePage = session.addPage(TestFixtures.solidPage(mode: .color))
 
     let exported = DocumentExporter.imagePageToExport(session: session)
 
     #expect(exported?.id == imagePage.id)
-    #expect(exported?.id != textPage.id)
+    #expect(session.pages.count == 1)
+  }
+
+  @Test(
+    "defaultImageFormat reflects the active preset's format, not a hardcoded JPEG (adversarial-review Finding 2 regression: DESIGN.md's preset contract is mode+dpi+color+format)"
+  )
+  func defaultImageFormatReflectsActivePreset() {
+    let session = DocumentSession(documentMode: .text)
+    #expect(DocumentExporter.defaultImageFormat(session: session) == .jpeg)  // untouched default
+
+    session.requestApplyPreset(.archive, confirmDiscard: { true })  // image/2400/color/tiff
+
+    #expect(DocumentExporter.defaultImageFormat(session: session) == .tiff)
   }
 
   @Test("suggestedBaseName strips the extension so the image format picker can swap it live")

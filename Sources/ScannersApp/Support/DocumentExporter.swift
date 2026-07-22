@@ -87,8 +87,22 @@ public enum DocumentExporter {
   /// section). Switching Text -> Image mid-session, without a ⌘N reset, leaves earlier
   /// Text-mode pages in `session.pages` ahead of the new Image-mode scan — `.first` was
   /// silently exporting that stale first page instead of the one the user just scanned.
+  /// `DocumentSession.addPage` now replaces rather than appends in Image mode, so `.last`
+  /// and `.first` are equivalent in practice today — kept as `.last` (not simplified to
+  /// `.first`) because it's the one that stays correct if that invariant ever changes, and
+  /// it matches `CanvasView`'s own preview fallback (`session.pages.last?.page.image`), so
+  /// Save always exports whatever's actually on screen.
   public static func imagePageToExport(session: DocumentSession) -> PageEntry? {
     session.pages.last
+  }
+
+  /// The format the image save panel opens pre-selected to — DESIGN.md: preset chips are
+  /// "One click = mode+dpi+color+format applied," so this must reflect whichever preset
+  /// (if any) is currently active, not a hardcoded default. `session.currentImageFormat`
+  /// starts at `.jpeg` (DESIGN.md's own Image-flow default) and is only ever changed by
+  /// `DocumentSession.requestApplyPreset`.
+  public static func defaultImageFormat(session: DocumentSession) -> ImageFormat {
+    session.currentImageFormat
   }
 
   /// Presents the image save panel (format picker included), writes the file, marks
@@ -99,7 +113,8 @@ public enum DocumentExporter {
     let baseName = suggestedBaseName(settings: settings)
     guard
       let (url, format) = SavePanel.presentImagePanel(
-        suggestedBaseName: baseName, directory: settings.saveFolder, defaultFormat: .jpeg)
+        suggestedBaseName: baseName, directory: settings.saveFolder,
+        defaultFormat: defaultImageFormat(session: session))
     else { return nil }
     let data = try format.encode(entry.page)
     try data.write(to: url)

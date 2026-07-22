@@ -92,9 +92,13 @@ struct ContentView: View {
         Spacer()
         Button("Cancel") { showSavePresetSheet = false }
         Button("Save") {
+          // `session.currentImageFormat`, not a hardcoded `.jpeg` — DESIGN.md's preset
+          // contract is "mode+dpi+color+format," so "Save as preset…" must capture
+          // whatever format is actually active right now, not silently normalize every
+          // user preset to JPEG regardless of what the user had selected.
           settings.savePreset(
             named: newPresetName, documentMode: session.documentMode, dpi: session.dpi,
-            colorMode: session.colorMode, imageFormat: .jpeg)
+            colorMode: session.colorMode, imageFormat: session.currentImageFormat)
           showSavePresetSheet = false
         }
         .keyboardShortcut(.defaultAction)

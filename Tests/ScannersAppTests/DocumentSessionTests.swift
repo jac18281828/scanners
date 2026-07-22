@@ -16,32 +16,174 @@ struct DocumentSessionTests {
     #expect(session.colorMode == .blackAndWhite)
   }
 
-  @Test("switching documentMode resets dpi/color to the new mode's own defaults")
+  @Test(
+    "switching documentMode via requestModeChange resets dpi/color to the new mode's own defaults")
   func modeSwitchAppliesNewDefaults() {
     let session = DocumentSession(documentMode: .text)
     session.dpi = 600
     session.colorMode = .color
 
-    session.documentMode = .image
+    let changed = session.requestModeChange(to: .image, confirmDiscard: { true })
+    #expect(changed)
 
     #expect(session.dpi == 600)  // .image's own default happens to also be 600
     #expect(session.colorMode == .color)  // .image's own default happens to also be .color
 
-    session.documentMode = .text
+    session.requestModeChange(to: .text, confirmDiscard: { true })
     #expect(session.dpi == 300)
     #expect(session.colorMode == .blackAndWhite)
   }
 
-  @Test(
-    "applying a preset sets mode+dpi+color together, not clobbered by the mode-switch default reset"
-  )
-  func applyPresetSetsAllThreeValues() {
+  @Test("requestModeChange to the current mode is a no-op that never asks to confirm")
+  func requestModeChangeToSameModeIsNoOp() {
     let session = DocumentSession(documentMode: .text)
-    session.applyPreset(.archive)  // image/2400/color
+    var confirmCalls = 0
 
+    let changed = session.requestModeChange(
+      to: .text,
+      confirmDiscard: {
+        confirmCalls += 1
+        return true
+      })
+
+    #expect(changed)
+    #expect(confirmCalls == 0)
+  }
+
+  @Test("requestModeChange with no unsaved pages switches mode without asking to confirm")
+  func requestModeChangeWithoutUnsavedPagesSkipsConfirm() {
+    let session = DocumentSession(documentMode: .text)
+    var confirmCalls = 0
+
+    let changed = session.requestModeChange(
+      to: .image,
+      confirmDiscard: {
+        confirmCalls += 1
+        return true
+      })
+
+    #expect(changed)
+    #expect(confirmCalls == 0)
+    #expect(session.documentMode == .image)
+  }
+
+  @Test(
+    "requestModeChange with unsaved pages asks to confirm; declining leaves mode and pages untouched (adversarial-review Finding 1 regression)"
+  )
+  func requestModeChangeWithUnsavedPagesDeclined() {
+    let session = DocumentSession(documentMode: .text)
+    let textPage = session.addPage(TestFixtures.solidPage(mode: .blackAndWhite))
+    #expect(session.hasUnsavedChanges)
+    var confirmCalls = 0
+
+    let changed = session.requestModeChange(
+      to: .image,
+      confirmDiscard: {
+        confirmCalls += 1
+        return false
+      })
+
+    #expect(changed == false)
+    #expect(confirmCalls == 1)
+    // Nothing changed: still Text mode, the page is still there, still unsaved -- declining
+    // the confirmation must not silently discard anything either.
+    #expect(session.documentMode == .text)
+    #expect(session.pages.map(\.id) == [textPage.id])
+    #expect(session.hasUnsavedChanges)
+  }
+
+  @Test(
+    "requestModeChange with unsaved pages, confirmed, clears pages before switching (adversarial-review Finding 1 regression)"
+  )
+  func requestModeChangeWithUnsavedPagesConfirmed() {
+    let session = DocumentSession(documentMode: .text)
+    session.addPage(TestFixtures.solidPage(mode: .blackAndWhite))
+    session.addPage(TestFixtures.solidPage(mode: .blackAndWhite))
+    #expect(session.pages.count == 2)
+    var confirmCalls = 0
+
+    let changed = session.requestModeChange(
+      to: .image,
+      confirmDiscard: {
+        confirmCalls += 1
+        return true
+      })
+
+    #expect(changed)
+    #expect(confirmCalls == 1)
+    #expect(session.documentMode == .image)
+    // The two unsaved Text-mode pages are gone -- switching modes must not leave them
+    // mixed in with whatever gets scanned next in the new mode.
+    #expect(session.pages.isEmpty)
+    #expect(session.hasUnsavedChanges == false)
+  }
+
+  @Test(
+    "applying a preset sets mode+dpi+color+format together, not clobbered by the mode-switch default reset"
+  )
+  func applyPresetSetsAllFourValues() {
+    let session = DocumentSession(documentMode: .text)
+    // .archive is image/2400/color/tiff.
+    let changed = session.requestApplyPreset(.archive, confirmDiscard: { true })
+
+    #expect(changed)
     #expect(session.documentMode == .image)
     #expect(session.dpi == 2400)
     #expect(session.colorMode == .color)
+    #expect(session.currentImageFormat == .tiff)
+  }
+
+  @Test(
+    "requestApplyPreset that keeps the current mode never asks to confirm, even with unsaved pages")
+  func requestApplyPresetSameModeNeverAsks() {
+    let session = DocumentSession(documentMode: .image)
+    session.addPage(TestFixtures.solidPage(mode: .color))
+    #expect(session.hasUnsavedChanges)
+    var confirmCalls = 0
+
+    // .photo is also .image mode -- switching to it doesn't discard anything mode-
+    // incompatible (the single Image-mode page just gets replaced on the next scan either
+    // way), so this must not interrupt the user with a confirmation.
+    let changed = session.requestApplyPreset(
+      .photo,
+      confirmDiscard: {
+        confirmCalls += 1
+        return true
+      })
+
+    #expect(changed)
+    #expect(confirmCalls == 0)
+    #expect(session.currentImageFormat == .jpeg)
+  }
+
+  @Test(
+    "requestApplyPreset that changes mode with unsaved pages asks to confirm; declining leaves everything untouched (adversarial-review Finding 1 regression)"
+  )
+  func requestApplyPresetModeChangeDeclined() {
+    let session = DocumentSession(documentMode: .text)
+    let textPage = session.addPage(TestFixtures.solidPage(mode: .blackAndWhite))
+
+    let changed = session.requestApplyPreset(.archive, confirmDiscard: { false })
+
+    #expect(changed == false)
+    #expect(session.documentMode == .text)
+    #expect(session.dpi == 300)
+    #expect(session.pages.map(\.id) == [textPage.id])
+  }
+
+  @Test(
+    "Image mode replaces rather than accumulates pages, so only the most recent scan is ever pending (adversarial-review Finding 1 regression: same root cause as the mode-switch confirm gate)"
+  )
+  func imageModeAddPageReplacesInsteadOfAccumulating() {
+    let session = DocumentSession(documentMode: .image)
+    let first = session.addPage(TestFixtures.solidPage(mode: .color))
+    #expect(session.pages.map(\.id) == [first.id])
+
+    let second = session.addPage(TestFixtures.solidPage(mode: .color))
+
+    #expect(session.pages.count == 1)
+    #expect(session.pages.map(\.id) == [second.id])
+    #expect(session.hasUnsavedChanges)
   }
 
   @Test("scan-loop: addPage appends in order and marks the session dirty")

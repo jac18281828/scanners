@@ -14,7 +14,14 @@ struct ControlStripView: View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(spacing: 16) {
         Picker(
-          "", selection: Binding(get: { session.documentMode }, set: { session.documentMode = $0 })
+          "",
+          selection: Binding(
+            get: { session.documentMode },
+            // requestModeChange, not a plain assignment: switching modes with unsaved
+            // pages needs the same confirm-or-block ⌘N already uses (DESIGN.md). If the
+            // user declines, nothing changes and this binding's `get:` reads back the
+            // still-current mode on the next render, so the Picker snaps back on its own.
+            set: { session.requestModeChange(to: $0) })
         ) {
           ForEach(DocumentMode.allCases) { mode in
             Text(mode.displayName).tag(mode)
@@ -56,7 +63,7 @@ struct ControlStripView: View {
       HStack(spacing: 8) {
         ForEach(settings.presets) { preset in
           Button(preset.name) {
-            session.applyPreset(preset)
+            session.requestApplyPreset(preset)
           }
           .buttonStyle(.bordered)
           .controlSize(.small)

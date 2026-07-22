@@ -51,9 +51,9 @@ struct ScannersAppRoot: App {
   }
 
   private func restoreLastUsedSettings() {
-    session.documentMode = settings.lastUsedDocumentMode
-    session.dpi = settings.lastUsedDPI
-    session.colorMode = settings.lastUsedColorMode
+    session.restoreLastUsed(
+      documentMode: settings.lastUsedDocumentMode, dpi: settings.lastUsedDPI,
+      colorMode: settings.lastUsedColorMode)
   }
 
   private func newDocument() {

@@ -17,6 +17,14 @@ public enum DocumentCropper {
   /// no observation at all (blank bed, low contrast) — `crop` returns the page unchanged.
   /// DESIGN.md is explicit that this must never fail or guess a crop: a low/no-confidence
   /// result always means "keep the full uncropped bed scan," not "try anyway."
+  ///
+  /// 0.6 is a reasonable starting guess, not a measured threshold — it hasn't been tuned
+  /// against a corpus of real `VNDetectDocumentSegmentationRequest` confidence scores
+  /// across varied real documents/lighting/platen conditions (this phase validated the
+  /// crop-and-recompute path and the no-detection fallback path each work correctly, on
+  /// synthetic fixtures and one real hardware document, but that's one data point, not a
+  /// calibration study). Revisit if real-world use shows it's too eager (crops when it
+  /// shouldn't) or too conservative (skips crops a human would call obvious).
   public static let minimumConfidence: Float = 0.6
 
   /// Detects the document boundary in `page.image` and, if found with at least
