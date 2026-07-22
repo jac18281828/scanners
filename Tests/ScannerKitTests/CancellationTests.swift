@@ -3,6 +3,15 @@ import Testing
 
 @testable import ScannerKit
 
+/// Lets the test's outer scope observe, from outside the consuming `Task`, that the
+/// `.started` event has actually been delivered — used to replace a blind fixed-duration
+/// sleep (flaky under CI scheduling latency; see `cancellingConsumerInvokesBackendCancel`)
+/// with a bounded poll for the real condition instead of a guessed time window.
+private actor StartedFlag {
+  private(set) var value = false
+  func markStarted() { value = true }
+}
+
 @Suite("Cancellation")
 struct CancellationTests {
   @Test("cancelling the consuming task wires through to backend.cancel and stops the stream")
@@ -26,12 +35,14 @@ struct CancellationTests {
       area: ScanArea(widthMM: 20, heightMM: 20)
     )
 
+    let startedFlag = StartedFlag()
     let consumer = Task<Bool, Never> {
       var sawStarted = false
       do {
         for try await event in session.scan(config: config) {
           if case .started = event {
             sawStarted = true
+            await startedFlag.markStarted()
           }
         }
       } catch {
@@ -41,7 +52,16 @@ struct CancellationTests {
       return sawStarted
     }
 
-    try await Task.sleep(for: .milliseconds(30))
+    // Poll for the real condition (.started actually delivered) instead of guessing a
+    // fixed sleep duration long enough to cover it — a blind sleep here previously flaked
+    // under CI's higher/less predictable scheduling latency (observed passing locally in
+    // 0.37s but timing out this exact window on a GitHub Actions runner).
+    var startedAttempts = 0
+    while await !startedFlag.value && startedAttempts < 200 {
+      try await Task.sleep(for: .milliseconds(10))
+      startedAttempts += 1
+    }
+
     consumer.cancel()
     let sawStarted = await consumer.value
 

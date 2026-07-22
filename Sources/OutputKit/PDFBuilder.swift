@@ -4,7 +4,6 @@ import Foundation
 import ImageIO
 import ScannerKit
 import UniformTypeIdentifiers
-import Vision
 
 public enum PDFBuilderError: Error, CustomStringConvertible, Sendable {
   case contextCreationFailed
@@ -62,14 +61,13 @@ public final class PDFBuilder {
   /// recognized lines in invisible text mode over the image, at their own bounding boxes —
   /// searchable/selectable in Preview.app without changing what's visible.
   ///
-  /// `ocrRecognitionLevel`/`ocrAutomaticallyDetectsLanguage` forward to `OCREngine` — see
-  /// its doc comment for why they're not hardcoded to the phase-specified `.accurate` /
-  /// autodetect-on defaults (which this method still uses unless overridden).
+  /// `ocrLanguage` forwards to `OCREngine.recognizeLines` — see its doc comment
+  /// (DESIGN.md decision #6) for why OCR is pinned to a fixed language rather than using
+  /// Vision's automatic language detection.
   public func append(
     page: ScannedPage,
     includeOCRTextLayer: Bool = false,
-    ocrRecognitionLevel: VNRequestTextRecognitionLevel = .accurate,
-    ocrAutomaticallyDetectsLanguage: Bool = true
+    ocrLanguage: String = "en-US"
   ) throws {
     guard let context, !finished else {
       throw PDFBuilderError.contextCreationFailed
@@ -92,11 +90,7 @@ public final class PDFBuilder {
     context.draw(embeddedImage, in: CGRect(x: 0, y: 0, width: widthPt, height: heightPt))
 
     if includeOCRTextLayer {
-      let lines = try OCREngine.recognizeLines(
-        in: normalized.image,
-        recognitionLevel: ocrRecognitionLevel,
-        automaticallyDetectsLanguage: ocrAutomaticallyDetectsLanguage
-      )
+      let lines = try OCREngine.recognizeLines(in: normalized.image, language: ocrLanguage)
       drawInvisibleText(lines, context: context, pageWidthPt: widthPt, pageHeightPt: heightPt)
     }
 

@@ -27,26 +27,24 @@ public enum OCRError: Error, CustomStringConvertible, Sendable {
 /// `VNImageRequestHandler.perform` is called, so this whole call is blocking — callers on
 /// the main actor should hop off it first, same as any other CPU-bound Vision request.
 public enum OCREngine {
-  /// `recognitionLevel`/`automaticallyDetectsLanguage` are exposed (rather than hardcoded)
-  /// so tests can request `.fast` — real usage (the app, `outputkit-cli`'s hardware smoke
-  /// test) keeps the phase-specified defaults (`.accurate`, autodetect on). This exists
-  /// because a GitHub Actions macOS runner's `.accurate` request took >20 minutes and never
-  /// produced a single line of test output before a manual cancellation was needed — Apple
-  /// Silicon CI runners are virtualized without Neural Engine passthrough, so CoreML falls
-  /// back to CPU-only inference; the heavier accurate-mode model is what's suspected to pay
-  /// for that, not a true infinite hang (unconfirmed — GitHub buffers a non-TTY child's
-  /// stdout until it exits, so no intermediate log output survived the cancellation to
-  /// prove which). `.fast` in CI keeps the code path genuinely exercised (real Vision
-  /// inference, not skipped) while bounding runtime.
+  /// `language` is a BCP-47 tag (`recognitionLanguages` takes an ordered-priority array;
+  /// this always passes a single fixed language, `automaticallyDetectsLanguage = false`) —
+  /// DESIGN.md decision #6. Vision's automatic language detection can trigger an on-device
+  /// language-model fetch on first use, which hung indefinitely (>20 minutes, no test
+  /// output at all) on a fresh GitHub Actions macOS CI runner in this phase's first CI
+  /// push. Pinning a language sidesteps that fetch entirely, in CI and in production, with
+  /// no accuracy tradeoff for documents actually in that language. Exposed as a parameter
+  /// (default `en-US`) rather than hardcoded so Phase 5's Settings pane can plug a user
+  /// preference into it.
   public static func recognizeLines(
     in image: CGImage,
-    recognitionLevel: VNRequestTextRecognitionLevel = .accurate,
-    automaticallyDetectsLanguage: Bool = true
+    language: String = "en-US"
   ) throws -> [OCRTextLine] {
     let request = VNRecognizeTextRequest()
-    request.recognitionLevel = recognitionLevel
+    request.recognitionLevel = .accurate
     request.usesLanguageCorrection = true
-    request.automaticallyDetectsLanguage = automaticallyDetectsLanguage
+    request.recognitionLanguages = [language]
+    request.automaticallyDetectsLanguage = false
 
     let handler = VNImageRequestHandler(cgImage: image, options: [:])
     do {

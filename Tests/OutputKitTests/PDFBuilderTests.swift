@@ -48,13 +48,9 @@ struct PDFBuilderTests {
 
   @Test("OCR text layer: recognized text is extractable via PDFKit's page.string")
   func ocrTextIsExtractable() throws {
-    // .fast, not .accurate — see OCREngine.recognizeLines' doc comment (a GH Actions macOS
-    // runner hung for >20 minutes on .accurate with zero output; suspected no Neural Engine
-    // passthrough in the CI VM). Scripts/smoke-output.sh validates real .accurate behavior
-    // against actual hardware.
     let page = Fixtures.textPage("HELLO WORLD 2026", dpi: 300, bilevel: false)
     let builder = try PDFBuilder()
-    try builder.append(page: page, includeOCRTextLayer: true, ocrRecognitionLevel: .fast)
+    try builder.append(page: page, includeOCRTextLayer: true)
     let data = builder.finish()
     let document = try #require(PDFDocument(data: data))
     let extracted = try #require(document.page(at: 0)).string ?? ""
@@ -68,14 +64,12 @@ struct PDFBuilderTests {
     // — near the bottom third. If the invisible layer were y-flipped, a selection rect
     // covering the *bottom* of the page would land on nothing (the flipped copy would sit
     // near the top instead), and one covering the *top* would find the text instead.
-    // Position-only check, deliberately accuracy-agnostic: .fast mode (see the comment
-    // above) can misread a character here and there ("BOTTOMTEXT" -> "BOTHOMTEXT" was seen
-    // during development) without that being a positioning bug. So this asserts *something*
-    // substantial was recognized at the bottom and *nothing* at the top, rather than
-    // matching the exact string.
+    // Position-only check, deliberately accuracy-agnostic (asserts *something* substantial
+    // was recognized at the bottom and *nothing* at the top, rather than matching the exact
+    // string) so it stays robust to incidental OCR misreads unrelated to positioning.
     let page = Fixtures.textPage("BOTTOMTEXT", dpi: 300, bilevel: false)
     let builder = try PDFBuilder()
-    try builder.append(page: page, includeOCRTextLayer: true, ocrRecognitionLevel: .fast)
+    try builder.append(page: page, includeOCRTextLayer: true)
     let data = builder.finish()
     let document = try #require(PDFDocument(data: data))
     let pdfPage = try #require(document.page(at: 0))

@@ -53,7 +53,14 @@ Scanners.app
 5. **OCR text layer via CGContext PDF drawing.** Draw the page image, then draw recognized
    strings in invisible text mode (`.invisible`) at their Vision bounding boxes. PDFKit
    alone can't do this; CoreGraphics can.
-6. **Ad-hoc signing now, Developer ID later.** Release workflow signs with `-` unless
+6. **⚠ OCR language pinned to English (`en-US`), not Vision's automatic language
+   detection.** `automaticallyDetectsLanguage` can trigger an on-device language-model
+   fetch on first use; this hung indefinitely on a fresh GitHub Actions macOS runner
+   (Phase 4, ~22min before manual cancellation — see STATE.md). Pinning a fixed language
+   avoids that fetch entirely, in CI and in production, with no `.accurate`→`.fast`
+   quality tradeoff. `OCREngine` takes the language as a parameter (default `en-US`);
+   Phase 5's Settings pane (⌘,) gets an OCR-language control that plugs into it.
+7. **Ad-hoc signing now, Developer ID later.** Release workflow signs with `-` unless
    `MACOS_CERT_P12`/`MACOS_CERT_PASSWORD`/`APPLE_TEAM_ID` secrets exist, then it switches to
    Developer ID + notarization with no workflow rewrite. README documents the one-time
    Gatekeeper right-click-open for ad-hoc builds.
@@ -69,7 +76,8 @@ Scanners.app
 - **Settings: presets, not forms.** Preset chips in the main window (Text Doc, Photo,
   Archive 2400, + user-defined). One click = mode+dpi+color+format applied. Settings pane
   (⌘,) manages presets, default save folder, filename template (`scan-2026-07-22-001`),
-  source (Flatbed/ADF), lamp timeout. Last-used settings persist. No modal ceremony:
+  source (Flatbed/ADF), lamp timeout, OCR language (default English). Last-used settings
+  persist. No modal ceremony:
   the main window always shows current mode/dpi/color inline, editable in place.
 
 ## Quality bar
