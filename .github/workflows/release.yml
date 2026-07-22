@@ -27,6 +27,28 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      # ----------------------------------------------------------------------
+      # HAS_SIGNING_SECRETS and HAS_NOTARY_SECRETS must agree. A Developer-ID-signed +
+      # hardened-runtime app that never gets notarized is MORE blocked by Gatekeeper than
+      # an ad-hoc build (the README's right-click-Open workaround doesn't cover it) — and
+      # nothing else in this workflow would warn about that. DESIGN.md decision #8's model
+      # is "ad-hoc OR fully signed+notarized"; partial secrets in either direction are a
+      # misconfiguration, not a state to silently degrade into. Fail before spending any
+      # build time on it.
+      # ----------------------------------------------------------------------
+      - name: Guard against partial signing/notary secrets
+        run: |
+          set -euo pipefail
+          if [[ "$HAS_SIGNING_SECRETS" != "$HAS_NOTARY_SECRETS" ]]; then
+            echo "error: partial signing secrets detected." >&2
+            echo "  HAS_SIGNING_SECRETS (MACOS_CERT_P12/MACOS_CERT_PASSWORD/APPLE_TEAM_ID) = $HAS_SIGNING_SECRETS" >&2
+            echo "  HAS_NOTARY_SECRETS  (NOTARY_APPLE_ID/NOTARY_APP_PASSWORD)              = $HAS_NOTARY_SECRETS" >&2
+            echo "DESIGN.md decision #8 is ad-hoc OR fully signed+notarized -- no silently-degraded partial state." >&2
+            echo "A Developer-ID-signed + hardened-runtime but un-notarized app is MORE blocked by Gatekeeper" >&2
+            echo "than an ad-hoc build. Set all five signing+notary secrets, or none of them." >&2
+            exit 1
+          fi
+
       - name: Show Swift version
         run: swift --version
 

@@ -145,7 +145,42 @@ codesign "${SIGN_ARGS[@]}" "$APP_DIR"
 echo "==> verifying signature"
 codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 
-echo "==> otool -L $EXE"
-otool -L "$EXE"
+# ---------------------------------------------------------------------------
+# 6. Verify no leaked build-machine paths — executable AND every bundled dylib
+# ---------------------------------------------------------------------------
+# Checking only $EXE here would miss a regression in build-sane.sh baking a Homebrew or
+# build-tree path into libsane.dylib/libusb-1.0.dylib itself (its own LC_ID_DYLIB or its
+# internal cross-reference) — build-sane.sh is expected to set those to @rpath/... but
+# nothing here actually confirmed that until now. Check every dylib that ships in
+# Contents/Frameworks, not just the top-level executable.
+LEAK_CHECK_TARGETS=("$EXE")
+while IFS= read -r -d '' dylib; do
+  LEAK_CHECK_TARGETS+=("$dylib")
+done < <(find "$APP_DIR/Contents/Frameworks" -name '*.dylib' -print0)
+
+leak_found=0
+for bin in "${LEAK_CHECK_TARGETS[@]}"; do
+  echo "==> otool -L $bin"
+  otool -L "$bin"
+  while IFS= read -r dep; do
+    [[ -z "$dep" ]] && continue
+    case "$dep" in
+    @rpath/* | @executable_path/* | @loader_path/* | /usr/lib/* | /System/*) ;;
+    /opt/homebrew* | /usr/local/Cellar/* | /usr/local/opt/*)
+      echo "error: $bin links a Homebrew path: $dep" >&2
+      leak_found=1
+      ;;
+    /*)
+      echo "error: $bin links a build-tree-absolute path: $dep" >&2
+      leak_found=1
+      ;;
+    esac
+  done < <(otool -L "$bin" | tail -n +2 | awk '{print $1}')
+done
+
+if [[ "$leak_found" -ne 0 ]]; then
+  echo "error: leaked build-machine path(s) found in the app bundle — see above" >&2
+  exit 1
+fi
 
 echo "==> done: $APP_DIR (version $SHORT_VERSION)"
