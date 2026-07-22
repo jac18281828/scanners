@@ -1,0 +1,27 @@
+I currently use canoe document scan on Linux to access my HP 4570 C scanner however for my main workflow, I have typically moved to M1 Mac on an R 64 processor. My line box is on its last leg. The keyboard is starting to fail and the battery doesn't work anymore so I need a better solution. I would like you to do the product and project design of a new application called scanners the goal of this application is that it will work like document scan.
+
+1. load up and connect to scanner including HP 4570c - i'm not sure if this requires a custom driver or USB?  please do the most canonical solution, scanner currently connected for you to test it
+2. present an interface that supports both text and image scanning
+   a. text scanning - default 300dpi black and white -  color supported, 75, 150 and 600 dpi also supported
+   b. image scanning default 600dpi color - black and white, 300, 600, 1200, 2400 also supported
+3. allow saving the resulting document in two different ways either as a multipage pdf or as a raster image format
+   a. pdf multi page will involve a loop - scanning each page in turn one at a time
+   b. image will only allow you to save one scan at a time - various formats, prefer JPEG is possible, others nice to have optional
+4. reset the document to a new document allowing to scan multiple documents in a session
+5. settings pane to choose setup - this should be creative and efficient - no ceremony make it professional - quickly get the job doen for various workflows and styles
+
+
+Rules:
+a. use idiomatic, reviewable code and good style and lint etc rules that enforce good behavior
+b. use tests, modularity and other maintainability practices
+c. include adversarial review of an appropriate level at each stage or step
+
+Base setup
+1. bsd-clause-3 open source including the license
+2. project setup for github my gh is active and logged in (scanners)
+3. workflow and project build, ideal is release for modern arm mac or 'any' platform
+4. i want to install a binary in my applications and run and use this
+5. a getting started readme on how to setup (install the app) would be great - easy and convienient no fuss
+
+
+You are the project arcitect.  You should produce prompts 1-N to implement this fully working scanners project for macos.  Finally you should produce a goal or plan prompt which will instruct sonnet to orchestrate and dispatch the implementation through appropriate subagents.  The top level sonnet should 'enforce the goal acheivement' Ideally if we burn too much of my rate limits i'd like to be able to pause and start and stop the project until we have enough units to complete the work.  I'm looking for a quality finish project as result of executing the goal prompt.  Your goal is to orchestrate all of this in enough detail that sonnet 5 does not get mixed up or make bad choices that take us in the wrong direction
