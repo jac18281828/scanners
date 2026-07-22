@@ -48,9 +48,10 @@ struct PDFBuilderTests {
 
   @Test("OCR text layer: recognized text is extractable via PDFKit's page.string")
   func ocrTextIsExtractable() throws {
+    // .fast — CI has no Neural Engine passthrough; .accurate hangs there (DESIGN.md #7).
     let page = Fixtures.textPage("HELLO WORLD 2026", dpi: 300, bilevel: false)
     let builder = try PDFBuilder()
-    try builder.append(page: page, includeOCRTextLayer: true)
+    try builder.append(page: page, includeOCRTextLayer: true, ocrRecognitionLevel: .fast)
     let data = builder.finish()
     let document = try #require(PDFDocument(data: data))
     let extracted = try #require(document.page(at: 0)).string ?? ""
@@ -67,9 +68,10 @@ struct PDFBuilderTests {
     // Position-only check, deliberately accuracy-agnostic (asserts *something* substantial
     // was recognized at the bottom and *nothing* at the top, rather than matching the exact
     // string) so it stays robust to incidental OCR misreads unrelated to positioning.
+    // .fast — CI has no Neural Engine passthrough; .accurate hangs there (DESIGN.md #7).
     let page = Fixtures.textPage("BOTTOMTEXT", dpi: 300, bilevel: false)
     let builder = try PDFBuilder()
-    try builder.append(page: page, includeOCRTextLayer: true)
+    try builder.append(page: page, includeOCRTextLayer: true, ocrRecognitionLevel: .fast)
     let data = builder.finish()
     let document = try #require(PDFDocument(data: data))
     let pdfPage = try #require(document.page(at: 0))

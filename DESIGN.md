@@ -55,12 +55,22 @@ Scanners.app
    alone can't do this; CoreGraphics can.
 6. **⚠ OCR language pinned to English (`en-US`), not Vision's automatic language
    detection.** `automaticallyDetectsLanguage` can trigger an on-device language-model
-   fetch on first use; this hung indefinitely on a fresh GitHub Actions macOS runner
-   (Phase 4, ~22min before manual cancellation — see STATE.md). Pinning a fixed language
-   avoids that fetch entirely, in CI and in production, with no `.accurate`→`.fast`
-   quality tradeoff. `OCREngine` takes the language as a parameter (default `en-US`);
-   Phase 5's Settings pane (⌘,) gets an OCR-language control that plugs into it.
-7. **Ad-hoc signing now, Developer ID later.** Release workflow signs with `-` unless
+   fetch on first use. `OCREngine` takes the language as a parameter (default `en-US`);
+   Phase 5's Settings pane (⌘,) gets an OCR-language control that plugs into it. (Pinning
+   language alone did not fix the CI hang described in decision #7 below — kept anyway
+   since it removes a real network dependency with no downside.)
+7. **⚠ `OCREngine.recognitionLevel` is a parameter: `.accurate` in the shipped app,
+   `.fast` in CI.** Phase 4's CI runs hung for the full `.accurate` recognition path
+   (15-22min, twice, on two different fix attempts — language pinning did not help) but
+   completed in ~1.5min under `.fast` — isolating the cause to `.accurate` mode itself,
+   not language detection. Suspected cause: GitHub's macOS Actions runners are
+   virtualized with no Neural Engine/GPU passthrough, and `.accurate` mode's on-device
+   model needs that acceleration to run in reasonable time. `.fast` doesn't have the same
+   dependency. CI-run OCR tests request `.fast` explicitly and use a relaxed accuracy bar
+   for that mode (real quality is only meaningfully validated locally, on real Mac
+   hardware, at `.accurate`). Ship default stays `.accurate` — this is a CI-environment
+   accommodation, not a product quality decision.
+8. **Ad-hoc signing now, Developer ID later.** Release workflow signs with `-` unless
    `MACOS_CERT_P12`/`MACOS_CERT_PASSWORD`/`APPLE_TEAM_ID` secrets exist, then it switches to
    Developer ID + notarization with no workflow rewrite. README documents the one-time
    Gatekeeper right-click-open for ad-hoc builds.

@@ -30,18 +30,26 @@ public enum OCREngine {
   /// `language` is a BCP-47 tag (`recognitionLanguages` takes an ordered-priority array;
   /// this always passes a single fixed language, `automaticallyDetectsLanguage = false`) —
   /// DESIGN.md decision #6. Vision's automatic language detection can trigger an on-device
-  /// language-model fetch on first use, which hung indefinitely (>20 minutes, no test
-  /// output at all) on a fresh GitHub Actions macOS CI runner in this phase's first CI
-  /// push. Pinning a language sidesteps that fetch entirely, in CI and in production, with
-  /// no accuracy tradeoff for documents actually in that language. Exposed as a parameter
-  /// (default `en-US`) rather than hardcoded so Phase 5's Settings pane can plug a user
-  /// preference into it.
+  /// language-model fetch on first use. Pinning a language sidesteps that fetch entirely,
+  /// in CI and in production, with no accuracy tradeoff for documents actually in that
+  /// language. Exposed as a parameter (default `en-US`) rather than hardcoded so Phase 5's
+  /// Settings pane can plug a user preference into it.
+  ///
+  /// `recognitionLevel` — DESIGN.md decision #7. Defaults to `.accurate` (unchanged
+  /// shipped-app behavior). GitHub Actions macOS runners are virtualized with no Neural
+  /// Engine/GPU passthrough; `.accurate` mode's on-device model needs that acceleration to
+  /// finish in reasonable time and instead ran the full 15-22 minutes without completing,
+  /// twice, under two different fix attempts (language pinning did not help — see decision
+  /// #6's note). `.fast` doesn't have the same dependency and completed in ~1.5 minutes.
+  /// CI-only callers (tests) must pass `.fast` explicitly; this default is never allowed to
+  /// silently degrade to `.fast` in a real, hardware-accelerated context.
   public static func recognizeLines(
     in image: CGImage,
-    language: String = "en-US"
+    language: String = "en-US",
+    recognitionLevel: VNRequestTextRecognitionLevel = .accurate
   ) throws -> [OCRTextLine] {
     let request = VNRecognizeTextRequest()
-    request.recognitionLevel = .accurate
+    request.recognitionLevel = recognitionLevel
     request.usesLanguageCorrection = true
     request.recognitionLanguages = [language]
     request.automaticallyDetectsLanguage = false
