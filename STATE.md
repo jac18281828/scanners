@@ -10,7 +10,7 @@ Legend: `todo` | `in-progress` | `review` | `done` | `blocked(<reason>)`
 
 | Phase | Prompt | Status | Commit | Review verdict |
 |-------|--------|--------|--------|----------------|
-| 1 Scaffold | prompts/01-scaffold.md | in-progress | — | — |
+| 1 Scaffold | prompts/01-scaffold.md | done | 21468556b7cdf91676a2b43df53467b523cd92ab | pass (plan-critic, non-blocking notes only) |
 | 2 SANE vendor | prompts/02-sane-vendor.md | todo | — | — |
 | 3 ScannerKit | prompts/03-scannerkit.md | todo | — | — |
 | 4 OutputKit | prompts/04-output-pipeline.md | todo | — | — |
@@ -36,3 +36,17 @@ next action is, any uncommitted state and where it lives.)
 ## Decision log
 
 (Orchestrator: append one line per notable decision made during implementation.)
+
+- 2026-07-22: Phase 1 landed. Repo `jac18281828/scanners` created PUBLIC per John's explicit
+  approval (asked via AskUserQuestion before dispatch, since public-repo creation is a
+  visible/hard-to-reverse action). CI green (run 29930974176), all local gates verified
+  independently by the orchestrator (not just the implementer's report).
+- 2026-07-22: `.swiftlint.yml` uses a curated ~40-rule `opt_in_rules` list instead of
+  `opt_in_rules: all`, because `all` pulls in `contrasted_opening_brace` (Allman braces)
+  and `explicit_type_interface`, both of which fight swift-format's K&R/inference style.
+  Adversarial review confirmed this is a reasonable "strict-but-sane" call, not a
+  weakening — no correctness rule was dropped.
+- 2026-07-22: Known non-blocking follow-up (not gate-blocking, deferred): `.swiftlint.yml`
+  declares `analyzer_rules` (unused_import, unused_declaration) that CI never runs, since
+  CI uses `swiftlint lint --strict` not `swiftlint analyze`. Either wire up an analyze step
+  or drop the block in a later phase.
