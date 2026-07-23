@@ -150,6 +150,40 @@ other agent's own test run:
   which this agent cannot do without hands; the fallback path above is the one directly tied
   to John's original real bug report, and is the one re-verified here on real hardware.
 
+## v1.0.0 release: fresh-install spot-check
+
+Downloaded the actual published release asset (not a local build) and spot-checked matrix
+cells 1 and 5 against it:
+
+- `curl`-downloaded `Scanners-1.0.0-arm64.zip` from the GitHub Release; SHA-256 matched the
+  release asset's own recorded digest exactly (`4a942fb5...12d2593c`). Unzipped, installed to
+  `/Applications`, applied a real quarantine flag (`com.apple.quarantine`, since a CLI
+  download doesn't get one the way Finder/Safari would) then cleared it via the README's
+  documented `xattr -dr com.apple.quarantine` step, and launched — reproducing the actual
+  documented first-run path, not just running an already-trusted binary.
+  `codesign`/`Info.plist` confirm `CFBundleShortVersionString=1.0.0`, ad-hoc signature, valid.
+- **Cell 1** (Text/300dpi/Black & White): scanned, saved via *Save PDF…*, verified via
+  PDFKit — 1 page, 215.9×297.77mm, 382 chars of extractable OCR text. **PASS.**
+- **Cell 5** (Image/600dpi/Color, JPEG): scanned, saved via *Save Image…* (accessory popup
+  read back "JPEG" before saving, confirming format), verified via `sips` — dpiWidth/Height
+  = 600.000 exact, 5030×6979px. **PASS.**
+
+**Anomaly caught and root-caused, not just noted:** both artifacts came out with page content
+rotated ~180° from the orientation seen in this same session's crop-fix re-verification scan
+(above), with the corner sticker no longer anywhere in frame. Investigated before accepting
+the spot-check, rather than assuming it was fine: ran a raw CLI scan
+(`scannerkit-cli`, bypassing the app and all of `OutputKit` entirely) — it reproduced the
+identical rotated, sticker-less framing. That rules out a software regression (the app and
+`DocumentCropper` weren't even in the code path); a pixel-diff of the two raw bed captures
+after compensating for a 180° rotation shows they're *not* the same content just flipped
+(mean abs grayscale diff ~24.7/255, not ~0) — consistent with the loose, unclipped
+card-stock insert having physically shifted position on the glass sometime during this
+session's many consecutive scans (lid-close cycles), not a rotation artifact of any kind.
+Cells 1/5 pass criteria (mode/dpi/color/format correctness) don't depend on bed content
+orientation, so this doesn't affect the PASS verdicts above — flagged here so the rotated
+scans in `/tmp/scanners-v1/fresh-install/` aren't mistaken later for a recurrence of the
+crop bug.
+
 ## Deviations / limitations
 
 - **Multi-page cells (1, 3, 9) reused identical physical content per page.** The agent
