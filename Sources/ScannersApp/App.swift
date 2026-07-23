@@ -22,7 +22,7 @@ struct ScannersAppRoot: App {
   }
 
   var body: some Scene {
-    WindowGroup {
+    WindowGroup("Scanners 👀") {
       ContentView(
         session: session, settings: settings, controller: controller, errorState: errorState
       )
