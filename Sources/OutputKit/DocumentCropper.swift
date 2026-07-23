@@ -7,12 +7,17 @@ import Vision
 /// decision #9. A modestly skewed placement is straightened with perspective correction; a
 /// near-axis-aligned one is snapped to its bounding box; anything ambiguous or beyond a sane
 /// rotation bound is left as the untouched full bed. Pure `ScannedPage`-in/`ScannedPage`-out,
-/// no hardware dependency, built on `VNDetectDocumentSegmentationRequest`.
+/// no hardware dependency, built on `VNDetectDocumentSegmentationRequest` -- with a
+/// Vision-independent fallback (`contentExtentCrop`) for hardware where that model can't find
+/// enough page-vs-background contrast to report any confidence at all.
 public enum DocumentCropper {
   /// Minimum confidence `VNDetectDocumentSegmentationRequest` must report before its quad is
-  /// trusted; below it (or on detection failure / no observation) `crop` returns the page
-  /// unchanged. DESIGN.md is explicit that this never fails or guesses: low/no confidence means
-  /// "keep the full bed scan." 0.6 is a starting guess, not a tuned threshold.
+  /// trusted; below it (or on detection failure / no observation) `crop` falls back to
+  /// `contentExtentCrop` rather than the Vision-driven path below. In practice this fallback
+  /// fires on every real scan tested on this app's actual hardware (white paper against a
+  /// similarly pale platen lid) -- Vision measures 0.0, not just low, since its segmentation
+  /// model needs page-vs-background contrast this hardware doesn't reliably provide. 0.6 is a
+  /// starting guess, not a tuned threshold; it exists for hardware where Vision *does* work.
   public static let minimumConfidence: Float = 0.6
 
   /// At or below this estimated rotation (degrees), `crop` snaps the quad to its axis-aligned
@@ -66,6 +71,36 @@ public enum DocumentCropper {
   /// contrasting sub-region; generous, since genuine documents agree to well under a degree.
   static let skewAgreementToleranceDegrees: Double = 15.0
 
+  /// Downsample ceiling for `contentExtentCrop`'s analysis -- same reasoning as
+  /// `skewAnalysisMaxDimension`: extent is a coarse, global property of the content, doesn't
+  /// need full resolution, and the result is scaled back up to the source image's own pixels
+  /// before cropping.
+  static let contentExtentAnalysisMaxDimension: Int = 900
+
+  /// Grayscale cutoff (0...1) below which a downsampled pixel counts as "content" for
+  /// `contentExtentCrop` -- deliberately lenient (anything not essentially white), since this
+  /// only needs to catch ink/graphics against white paper, not classify exact darkness.
+  static let contentDarknessThreshold: Float = 0.7
+
+  /// Minimum connected-component size (pixels, at `contentExtentAnalysisMaxDimension` scale) for
+  /// `contentExtentCrop`'s denoise pass to keep it -- rejects isolated JPEG/dust-speck/scan-edge
+  /// noise (a `.`) while keeping any real stroke or line (a `—`, which has correlated neighbors)
+  /// regardless of how short. Well below the smallest real character component measured against
+  /// real scans (13px).
+  static let contentDenoiseMinComponentPixels: Int = 5
+
+  /// Maximum short-dimension thickness (pixels, at `contentExtentAnalysisMaxDimension` scale)
+  /// for a border-touching component to be dropped as a sliver artifact in `contentExtentCrop`.
+  /// Measured against real scans: shadow/artifact fragments came in at 1-4px thick; kept well
+  /// under real content's smallest measured dimension so a real photo or graphic near the page
+  /// edge is never mistaken for one.
+  static let contentExtentSliverMaxThickness: Int = 6
+
+  /// Outward safety margin (mm) added to `contentExtentCrop`'s detected box before cropping --
+  /// this fallback has no per-edge confidence signal the way `decide` does, so it errs toward
+  /// keeping a visible sliver of background over risking a clipped character at the margin.
+  static let contentExtentPaddingMM: Double = 3.0
+
   /// Detects the document boundary and, if found with at least `minimumConfidence`, crops to
   /// it: within `maximumNoiseRotationDegrees` a bounding-box snap; in the noise..cap band a
   /// confident, unambiguous skew is perspective-corrected (an ambiguous one falls back); beyond
@@ -78,7 +113,7 @@ public enum DocumentCropper {
     guard let observation = detectDocument(in: page.image),
       observation.confidence >= minimumConfidence
     else {
-      return page
+      return contentExtentCrop(page)
     }
 
     let extent = CGRect(x: 0, y: 0, width: page.image.width, height: page.image.height)
@@ -115,7 +150,7 @@ public enum DocumentCropper {
 
   /// Rebuilds a `ScannedPage` around a corrected image, recomputing physical size from its own
   /// pixels against `page.hardwareDPI`. Returns `nil` (so `crop` falls back) if degenerate.
-  private static func repackaged(_ page: ScannedPage, corrected: CGImage) -> ScannedPage? {
+  static func repackaged(_ page: ScannedPage, corrected: CGImage) -> ScannedPage? {
     guard corrected.width > 0, corrected.height > 0 else { return nil }
     let croppedWidthMM = Double(corrected.width) / Double(page.hardwareDPI) * 25.4
     let croppedHeightMM = Double(corrected.height) / Double(page.hardwareDPI) * 25.4
@@ -253,148 +288,5 @@ public enum DocumentCropper {
     filter.setValue(CIVector(cgPoint: corners.bottomRight), forKey: "inputBottomRight")
     guard let outputImage = filter.outputImage else { return nil }
     return CIContext().createCGImage(outputImage, from: outputImage.extent)
-  }
-}
-
-// MARK: - Skew analysis (projection profile)
-
-extension DocumentCropper {
-  /// The projection-profile search result: the best angle and the two trust metrics.
-  /// `angleDegrees`' sign is the search's own projection convention (opposite Vision's); only
-  /// its magnitude is used downstream, so callers compare `abs(angleDegrees)`.
-  struct SkewEstimate {
-    let angleDegrees: Double
-    let contrast: Double
-    let secondPeakRatio: Double
-
-    /// A clean, well-defined peak: high above the noise floor with no comparable competitor.
-    var confident: Bool {
-      contrast >= minimumSkewContrast && secondPeakRatio <= maximumSecondPeakRatio
-    }
-  }
-
-  /// Finds the document's dominant skew by projection-profile analysis (Radon-transform-style):
-  /// at the true rotation, projecting edge energy onto an axis gives the sharpest profile; at
-  /// wrong angles it blurs out. The `SkewEstimate` carries the winning angle's height above the
-  /// median (`contrast`) and the best competing peak (`secondPeakRatio`) — confidence, not just
-  /// the fit, per decision #9's ±30° addendum. Deterministic (no Vision), so tests drive it.
-  static func estimateSkew(_ image: CGImage) -> SkewEstimate {
-    guard let gray = grayscaleBuffer(image, maxDimension: skewAnalysisMaxDimension) else {
-      return SkewEstimate(angleDegrees: 0, contrast: 0, secondPeakRatio: 1)
-    }
-    let edges = gradientMagnitude(gray)
-
-    var angles: [Double] = []
-    var scores: [Double] = []
-    var angle = -skewSearchLimitDegrees
-    while angle <= skewSearchLimitDegrees + 1e-9 {
-      angles.append(angle)
-      scores.append(profileSharpness(edges, thetaDegrees: angle))
-      angle += skewSearchStepDegrees
-    }
-    guard !scores.isEmpty else {
-      return SkewEstimate(angleDegrees: 0, contrast: 0, secondPeakRatio: 1)
-    }
-
-    var bestIndex = 0
-    for index in scores.indices where scores[index] > scores[bestIndex] {
-      bestIndex = index
-    }
-    let bestAngle = angles[bestIndex]
-    let peak = scores[bestIndex]
-    let median = scores.sorted()[scores.count / 2]
-
-    var competitor = 0.0
-    for index in scores.indices
-    where abs(angles[index] - bestAngle) > peakSeparationDegrees && scores[index] > competitor {
-      competitor = scores[index]
-    }
-
-    return SkewEstimate(
-      angleDegrees: bestAngle, contrast: peak / max(median, 1e-9),
-      secondPeakRatio: competitor / max(peak, 1e-9))
-  }
-
-  /// A downsampled single-channel (0...1) view of `image`, longest edge `maxDimension`.
-  private static func grayscaleBuffer(
-    _ image: CGImage, maxDimension: Int
-  ) -> (width: Int, height: Int, pixels: [Float])? {
-    let scale = min(1.0, Double(maxDimension) / Double(max(image.width, image.height)))
-    let width = max(1, Int(Double(image.width) * scale))
-    let height = max(1, Int(Double(image.height) * scale))
-    var bytes = [UInt8](repeating: 0, count: width * height)
-    let colorSpace = CGColorSpaceCreateDeviceGray()
-    let drew = bytes.withUnsafeMutableBytes { raw -> Bool in
-      guard
-        let context = CGContext(
-          data: raw.baseAddress, width: width, height: height, bitsPerComponent: 8,
-          bytesPerRow: width, space: colorSpace, bitmapInfo: CGImageAlphaInfo.none.rawValue)
-      else {
-        return false
-      }
-      context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-      return true
-    }
-    guard drew else { return nil }
-    return (width, height, bytes.map { Float($0) / 255 })
-  }
-
-  /// Sobel gradient magnitude — the edge-energy map the sweep runs over. Working from edges,
-  /// not raw intensity, makes it robust: page boundaries and text light up, flat background not.
-  private static func gradientMagnitude(
-    _ gray: (width: Int, height: Int, pixels: [Float])
-  ) -> (width: Int, height: Int, pixels: [Float]) {
-    let width = gray.width
-    let height = gray.height
-    var out = [Float](repeating: 0, count: width * height)
-    guard width >= 3, height >= 3 else { return (width, height, out) }
-    func at(_ x: Int, _ y: Int) -> Float { gray.pixels[y * width + x] }
-    for y in 1..<(height - 1) {
-      for x in 1..<(width - 1) {
-        let gx =
-          (at(x + 1, y - 1) + 2 * at(x + 1, y) + at(x + 1, y + 1))
-          - (at(x - 1, y - 1) + 2 * at(x - 1, y) + at(x - 1, y + 1))
-        let gy =
-          (at(x - 1, y + 1) + 2 * at(x, y + 1) + at(x + 1, y + 1))
-          - (at(x - 1, y - 1) + 2 * at(x, y - 1) + at(x + 1, y - 1))
-        out[y * width + x] = (gx * gx + gy * gy).squareRoot()
-      }
-    }
-    return (width, height, out)
-  }
-
-  /// Projects `edges` onto the axis perpendicular to lines at `thetaDegrees` and returns the
-  /// profile's sharpness (sum of squared adjacent-bin differences). Maximal where edges align
-  /// into steep steps; small where a rotated edge smears across many bins.
-  private static func profileSharpness(
-    _ edges: (width: Int, height: Int, pixels: [Float]), thetaDegrees: Double
-  ) -> Double {
-    let theta = thetaDegrees * .pi / 180
-    let sinT = sin(theta)
-    let cosT = cos(theta)
-    let width = edges.width
-    let height = edges.height
-    let centerX = Double(width) / 2
-    let centerY = Double(height) / 2
-    let binCount = Int((Double(width) * abs(sinT) + Double(height) * abs(cosT)).rounded()) + 2
-    guard binCount > 2 else { return 0 }
-    let offset = Double(binCount) / 2
-    var profile = [Double](repeating: 0, count: binCount)
-    for y in 0..<height {
-      let dy = Double(y) - centerY
-      for x in 0..<width {
-        let magnitude = edges.pixels[y * width + x]
-        if magnitude == 0 { continue }
-        let dx = Double(x) - centerX
-        let bin = Int(-dx * sinT + dy * cosT + offset)
-        if bin >= 0 && bin < binCount { profile[bin] += Double(magnitude) }
-      }
-    }
-    var sharpness = 0.0
-    for bin in 1..<binCount {
-      let delta = profile[bin] - profile[bin - 1]
-      sharpness += delta * delta
-    }
-    return sharpness
   }
 }
