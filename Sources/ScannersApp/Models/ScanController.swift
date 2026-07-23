@@ -25,6 +25,49 @@ public final class ScanController {
     public var isRetryable: Bool
   }
 
+  /// Bounds how often raw `ScanEvent.progress` ticks actually mutate `scanState`. A
+  /// full-bed high-dpi scan can yield thousands of `.progress` events -- one per 64KB SANE
+  /// read chunk (`ScanSession.readChunkSize`); at 1200dpi full-bed color that's ~7,000
+  /// ticks, at 2400dpi ~27,000+. Mutating this `@Observable` class's `scanState` on every
+  /// single one floods SwiftUI's main-thread view-graph with a re-render per tick. Found on
+  /// real hardware (Phase 7, Cell 10): a 1200dpi scan left the whole window unresponsive to
+  /// all input -- including clicking Cancel -- for 8+ minutes; `sample` showed the main
+  /// thread pegged at ~100% CPU inside SwiftUI's `AttributeGraph`/`GraphHost` render
+  /// machinery the entire time, with RSS nearly flat (not scan I/O). `ProgressPublishPolicy`
+  /// only lets a `.progress` tick through if it moves the fraction by at least 1% since the
+  /// last one actually published (plus always the first tick and anything at/above 100%),
+  /// bounding renders to roughly 100 per scan regardless of how many raw chunks the backend
+  /// reports -- see the "Progress throttling" section of `ScanControllerTests` for both the
+  /// throttling behavior itself in isolation (deterministic, no timing/hardware dependency)
+  /// and a `ScanController`-level integration regression against a real, large, many-chunk
+  /// `MockSane` scan.
+  struct ProgressPublishPolicy {
+    static let minimumStep: Double = 0.01
+    // Binary floating point: e.g. 0.11 - 0.10 == 0.009999999999999998, just under
+    // minimumStep, so an exact-looking 1% step would otherwise be wrongly rejected at the
+    // boundary. Real progress fractions (arbitrary byte-count ratios) rarely land exactly
+    // on a 1% line anyway; this only guards the boundary case, it doesn't loosen the policy.
+    private static let epsilon: Double = 1e-9
+    private var lastPublished: Double?
+
+    /// Returns whether `fraction` should be published (and records it as the new baseline
+    /// if so) -- always `true` for the very first call, for anything at/above 100%
+    /// (guarantees the UI always shows a visible completion state, never gets stuck at a
+    /// stale sub-100% value if the last few ticks got coalesced away), and otherwise only
+    /// once `fraction` has advanced by `minimumStep` since the last published value.
+    mutating func shouldPublish(_ fraction: Double) -> Bool {
+      guard let lastPublished else {
+        self.lastPublished = fraction
+        return true
+      }
+      guard fraction >= 1.0 || fraction - lastPublished >= Self.minimumStep - Self.epsilon else {
+        return false
+      }
+      self.lastPublished = fraction
+      return true
+    }
+  }
+
   public private(set) var scanState: ScanState = .idle
   // `internal(set)`, not `private(set)`: real app code only ever reads this from outside
   // the type, but `@testable import` needs to set it directly to exercise `retry()`
@@ -104,13 +147,18 @@ public final class ScanController {
       let config = session.currentConfiguration(
         source: settings.source, extendLampTimeout: settings.extendLampTimeout)
       scanState = .scanning(progress: 0)
+      // Fresh per scan -- see ProgressPublishPolicy's doc comment. A local var (not a
+      // stored property) so there's no cross-scan state to reset between calls.
+      var progressPolicy = ProgressPublishPolicy()
 
       for try await event in scanSession.scan(config: config) {
         switch event {
         case .started:
           break
         case .progress(let fraction):
-          scanState = .scanning(progress: fraction)
+          if progressPolicy.shouldPublish(fraction) {
+            scanState = .scanning(progress: fraction)
+          }
         case .completed(let page):
           // Crop happens here, before the page ever reaches `session.addPage` -- DESIGN.md
           // decision #9: "before it lands in the page strip / canvas preview," so the UI
