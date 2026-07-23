@@ -3,60 +3,77 @@ import CoreImage
 import ScannerKit
 import Vision
 
-/// Detects the scanned document's boundary within a full-bed scan and crops (with
-/// perspective correction to a clean rectangle) to it — DESIGN.md decision #9. A full-bed
-/// scan includes the platen/lid background around the actual page; this trims that away so
-/// the UI and every exported output shows just the document.
-///
-/// Pure `ScannedPage`-in/`ScannedPage`-out, no hardware dependency — built on
-/// `VNDetectDocumentSegmentationRequest`, the same Vision framework `OCREngine` already
-/// uses elsewhere in OutputKit, just a different (purpose-built, lighter) request type.
+/// Detects the scanned document's boundary within a full-bed scan and crops to it — DESIGN.md
+/// decision #9. A modestly skewed placement is straightened with perspective correction; a
+/// near-axis-aligned one is snapped to its bounding box; anything ambiguous or beyond a sane
+/// rotation bound is left as the untouched full bed. Pure `ScannedPage`-in/`ScannedPage`-out,
+/// no hardware dependency, built on `VNDetectDocumentSegmentationRequest`.
 public enum DocumentCropper {
-  /// Minimum confidence `VNDetectDocumentSegmentationRequest` must report before its
-  /// detected quadrilateral is trusted. Below this — or on outright detection failure, or
-  /// no observation at all (blank bed, low contrast) — `crop` returns the page unchanged.
-  /// DESIGN.md is explicit that this must never fail or guess a crop: a low/no-confidence
-  /// result always means "keep the full uncropped bed scan," not "try anyway."
-  ///
-  /// 0.6 is a reasonable starting guess, not a measured threshold — it hasn't been tuned
-  /// against a corpus of real `VNDetectDocumentSegmentationRequest` confidence scores
-  /// across varied real documents/lighting/platen conditions (this phase validated the
-  /// crop-and-recompute path and the no-detection fallback path each work correctly, on
-  /// synthetic fixtures and one real hardware document, but that's one data point, not a
-  /// calibration study). Revisit if real-world use shows it's too eager (crops when it
-  /// shouldn't) or too conservative (skips crops a human would call obvious).
+  /// Minimum confidence `VNDetectDocumentSegmentationRequest` must report before its quad is
+  /// trusted; below it (or on detection failure / no observation) `crop` returns the page
+  /// unchanged. DESIGN.md is explicit that this never fails or guesses: low/no confidence means
+  /// "keep the full bed scan." 0.6 is a starting guess, not a tuned threshold.
   public static let minimumConfidence: Float = 0.6
 
-  /// Above this estimated rotation (degrees), `crop` treats the detected quad as a real,
-  /// meaningfully skewed document and runs full `CIPerspectiveCorrection`. At or below it,
-  /// the quad is snapped to its axis-aligned bounding box instead — see
-  /// `estimatedRotationDegrees` for why "small angle" is measured as the *average* of all
-  /// four edges' implied rotation rather than any single edge, and DESIGN.md decision #9's
-  /// addendum for the real-hardware measurement this was calibrated against: a confidently
-  /// detected (0.99), physically axis-aligned real document came back from
-  /// `VNDetectDocumentSegmentationRequest` with a top edge reading 2.82° and a bottom edge
-  /// reading -0.31° (corners quantized to a coarse internal grid, not a truly rotated
-  /// rectangle) — averaged across all four edges that's 0.63°. 2.0° leaves that a comfortable
-  /// >3x margin while still well under the tens-of-degrees range a genuinely, visibly skewed
-  /// document produces.
+  /// At or below this estimated rotation (degrees), `crop` snaps the quad to its axis-aligned
+  /// bounding box instead of perspective-correcting — DESIGN.md decision #9's rotation-noise
+  /// addendum. A physically straight real document came back from Vision with edges at +2.82°
+  /// and -0.31° (corner-quantization noise, not skew), averaging 0.63°; 2.0° leaves that a >3x
+  /// margin while staying well under a genuine skew. Rejecting jitter (this lower bound) is a
+  /// separate concern from capping correction (the upper bound below); both are needed.
   public static let maximumNoiseRotationDegrees: Double = 2.0
 
-  /// Detects the document boundary in `page.image` and, if found with at least
-  /// `minimumConfidence`, crops and perspective-corrects to it. `widthMM`/`heightMM` are
-  /// recomputed from the *corrected output image's own pixel dimensions* against
-  /// `page.hardwareDPI` — the same `pixels / dpi * 25.4mm-per-inch` relationship
-  /// `PageNormalizer` already relies on elsewhere in OutputKit — rather than from Vision's
-  /// normalized corner coordinates directly. That matters: the four corners aren't
-  /// necessarily an axis-aligned rectangle (a document can sit skewed on the platen), so a
-  /// naive `(maxX - minX) * page.widthMM` mixes each axis's own physical scale incorrectly
-  /// once there's any rotation. Deriving physical size from the *already axis-aligned,
-  /// already-corrected* output image's pixel count sidesteps that entirely and is exact.
-  ///
-  /// Never throws — a failure to detect or correct a crop is not a failure to scan.
-  /// `requestedDPI`/`hardwareDPI`/`mode` are carried over unchanged (crop changes total
-  /// physical size, not pixel density), so every downstream consumer (`PageNormalizer`,
-  /// `PDFBuilder`, `ImageExporter`) keeps working from `widthMM`/`heightMM` exactly like it
-  /// already does today, with no changes needed on their end.
+  /// Upper bound of the rotation-correction search, degrees from upright — DESIGN.md decision
+  /// #9's ±30° addendum. Above this `crop` always falls back to the untouched upright bed,
+  /// unconditionally, no matter how confident a fit looks. A scope bound, not a quality
+  /// judgement: it rescues *accidental* skew (a few degrees up to ~20–30°), not arbitrary
+  /// rotation. Beyond ±30° a careless page is better re-placed and a deliberately steep scan is
+  /// left undistorted at its true angle — one rule, no guessing intent. OCR/text-orientation
+  /// signals were considered for the ambiguous cases and rejected: they only help Text mode and
+  /// duplicate the later Text-mode OCR pass. Stays purely geometric.
+  public static let maximumCorrectionDegrees: Double = 30.0
+
+  /// Half-width of `estimateSkew`'s angle sweep, degrees — a few degrees past
+  /// `maximumCorrectionDegrees` on purpose so a skew just past the cap lands its profile peak
+  /// past 30° where `decide`'s cap check rejects it, rather than piling up at the boundary and
+  /// reading as an in-bounds 30° skew.
+  static let skewSearchLimitDegrees: Double = 35.0
+
+  /// Angular step of the `estimateSkew` sweep, degrees. 1° keeps the sweep to ~71 passes.
+  static let skewSearchStepDegrees: Double = 1.0
+
+  /// Longest edge (pixels) `estimateSkew` downsamples to. Skew is a global, low-frequency
+  /// property; 400px preserves it while keeping each per-angle pass cheap.
+  static let skewAnalysisMaxDimension: Int = 400
+
+  /// Minimum peak-to-median profile-sharpness ratio for a confident skew — rejects a flat,
+  /// structureless landscape. Clean documents measure 170–260; an edgeless region single digits.
+  static let minimumSkewContrast: Double = 30.0
+
+  /// Maximum ratio of the strongest *competing* peak (>`peakSeparationDegrees` from the best
+  /// angle) to the best peak, for a confident skew. The load-bearing ambiguity gate: a clean
+  /// document has one dominant orientation (competitor ≈ 0.01–0.02); a page with a high-contrast
+  /// sub-region at a different angle — John's benefits-page sticker — yields two comparable peaks
+  /// (competitor ≈ 0.4–0.5) and must fall back to upright.
+  static let maximumSecondPeakRatio: Double = 0.25
+
+  /// Angles within this many degrees of the best angle count as its shoulder, not a competitor,
+  /// when computing the second-peak ratio.
+  static let peakSeparationDegrees: Double = 5.0
+
+  /// How far the profile skew angle may disagree with Vision's quad rotation (degrees) and still
+  /// perspective-correct. Defence-in-depth against a quad dragged off the true boundary by a
+  /// contrasting sub-region; generous, since genuine documents agree to well under a degree.
+  static let skewAgreementToleranceDegrees: Double = 15.0
+
+  /// Detects the document boundary and, if found with at least `minimumConfidence`, crops to
+  /// it: within `maximumNoiseRotationDegrees` a bounding-box snap; in the noise..cap band a
+  /// confident, unambiguous skew is perspective-corrected (an ambiguous one falls back); beyond
+  /// `maximumCorrectionDegrees` always the full upright bed. `widthMM`/`heightMM` are recomputed
+  /// from the corrected image's *own* pixels against `page.hardwareDPI` (the `pixels / dpi *
+  /// 25.4` relationship used across OutputKit), not from Vision's corners — a skewed quad's
+  /// `(maxX - minX) * page.widthMM` would mix each axis's scale incorrectly. Never throws;
+  /// `requestedDPI`/`hardwareDPI`/`mode` carry over unchanged.
   public static func crop(_ page: ScannedPage) -> ScannedPage {
     guard let observation = detectDocument(in: page.image),
       observation.confidence >= minimumConfidence
@@ -68,31 +85,80 @@ public enum DocumentCropper {
     let corners = pixelCorners(observation, imageExtent: extent)
     let rotationDegrees = abs(estimatedRotationDegrees(corners))
 
-    // A meaningfully skewed document (someone placed the page at a real angle) gets full
-    // perspective correction, same as before. A near-axis-aligned quad — the common real-
-    // hardware case, see `maximumNoiseRotationDegrees` — is snapped to a plain bounding-box
-    // crop instead: there's no real rotation to correct, so don't introduce one.
-    let corrected: CGImage? =
-      rotationDegrees <= maximumNoiseRotationDegrees
-      ? boundingBoxCrop(page.image, corners: corners, imageExtent: extent)
-      : perspectiveCorrect(page.image, corners: corners)
+    // Only the (noise..cap] band needs the projection-profile analysis; the bounding-box and
+    // beyond-cap cases resolve from Vision's rotation alone (`decide` ignores the skew estimate
+    // there), so a not-confident placeholder is safe.
+    let needsSkewAnalysis =
+      rotationDegrees > maximumNoiseRotationDegrees
+      && rotationDegrees <= maximumCorrectionDegrees
+    let skew =
+      needsSkewAnalysis
+      ? estimateSkew(page.image)
+      : SkewEstimate(angleDegrees: rotationDegrees, contrast: 0, secondPeakRatio: 1)
 
-    guard let corrected, corrected.width > 0, corrected.height > 0 else {
+    switch decide(visionRotationDegrees: rotationDegrees, skew: skew) {
+    case .fallback:
       return page
+    case .boundingBox:
+      guard let corrected = boundingBoxCrop(page.image, corners: corners, imageExtent: extent)
+      else {
+        return page
+      }
+      return repackaged(page, corrected: corrected) ?? page
+    case .perspective:
+      guard let corrected = perspectiveCorrect(page.image, corners: corners) else {
+        return page
+      }
+      return repackaged(page, corrected: corrected) ?? page
     }
+  }
 
+  /// Rebuilds a `ScannedPage` around a corrected image, recomputing physical size from its own
+  /// pixels against `page.hardwareDPI`. Returns `nil` (so `crop` falls back) if degenerate.
+  private static func repackaged(_ page: ScannedPage, corrected: CGImage) -> ScannedPage? {
+    guard corrected.width > 0, corrected.height > 0 else { return nil }
     let croppedWidthMM = Double(corrected.width) / Double(page.hardwareDPI) * 25.4
     let croppedHeightMM = Double(corrected.height) / Double(page.hardwareDPI) * 25.4
-    guard croppedWidthMM > 0, croppedHeightMM > 0 else { return page }
-
+    guard croppedWidthMM > 0, croppedHeightMM > 0 else { return nil }
     return ScannedPage(
-      image: corrected,
-      widthMM: croppedWidthMM,
-      heightMM: croppedHeightMM,
-      requestedDPI: page.requestedDPI,
-      hardwareDPI: page.hardwareDPI,
-      mode: page.mode
-    )
+      image: corrected, widthMM: croppedWidthMM, heightMM: croppedHeightMM,
+      requestedDPI: page.requestedDPI, hardwareDPI: page.hardwareDPI, mode: page.mode)
+  }
+
+  // MARK: - Decision
+
+  /// What `crop` should do with a detected quad.
+  enum CropDecision: Equatable {
+    /// Near-axis-aligned: snap to the bounding box, no rotation introduced.
+    case boundingBox
+    /// A confident, in-bounds, unambiguous skew: perspective-correct to the quad.
+    case perspective
+    /// Ambiguous, beyond the ±30° cap, or otherwise not safely correctable: full upright bed.
+    case fallback
+  }
+
+  /// The bounded, confidence-gated decision — the heart of DESIGN.md decision #9's ±30°
+  /// addendum, factored out of `crop` so it is unit-testable against exact inputs without live
+  /// Vision. Gates in order: within noise → bounding box; beyond the cap → fallback
+  /// (unconditional); otherwise correct only on a confident skew within the cap that agrees
+  /// with Vision's quad, else fallback. Where John's two examples split: a clean card at 3°
+  /// shows one confident peak → perspective; the benefits page's sticker fights its true angle
+  /// → no confident peak → fallback to upright.
+  static func decide(visionRotationDegrees: Double, skew: SkewEstimate) -> CropDecision {
+    let rotation = abs(visionRotationDegrees)
+    if rotation <= maximumNoiseRotationDegrees {
+      return .boundingBox
+    }
+    guard rotation <= maximumCorrectionDegrees else {
+      return .fallback
+    }
+    guard skew.confident,
+      abs(skew.angleDegrees) <= maximumCorrectionDegrees,
+      abs(abs(skew.angleDegrees) - rotation) <= skewAgreementToleranceDegrees
+    else {
+      return .fallback
+    }
+    return .perspective
   }
 
   // MARK: - Detection
@@ -110,22 +176,12 @@ public enum DocumentCropper {
 
   // MARK: - Quad geometry
 
-  /// The observation's four corners, converted once from Vision's normalized (0...1,
-  /// origin bottom-left) coordinates into pixel coordinates in `imageExtent`'s space.
-  /// Vision's normalized corner coordinates map directly onto Core Image's own coordinate
-  /// space — also bottom-left-origin — so this is a plain per-axis scale, no y-flip (same
-  /// convention `OCRTextLine`'s doc comment already notes for Vision-into-
-  /// CoreGraphics/CoreImage mappings elsewhere in OutputKit). Shared by the rotation
-  /// estimate, the bounding-box crop, and the perspective-correction path so all three
-  /// agree on exactly the same four points.
-  ///
-  /// Not `private`: `estimatedRotationDegrees`/`boundingBoxCrop` below take this directly
-  /// (rather than a `VNRectangleObservation` + extent) specifically so
-  /// `DocumentCropperTests` can drive them with exact, pinned corner coordinates —
-  /// including the real-hardware-measured noise case from DESIGN.md decision #9's addendum
-  /// — without depending on live `VNDetectDocumentSegmentationRequest` output, which is
-  /// real-hardware/model-version dependent and not a source of deterministic test input.
-  /// Still module-internal, not part of `DocumentCropper`'s public API.
+  /// The observation's four corners in pixel coordinates. Vision's normalized (0...1,
+  /// bottom-left origin) coordinates map directly onto Core Image's own bottom-left-origin
+  /// space, so this is a plain per-axis scale, no y-flip. Shared by the rotation estimate,
+  /// bounding-box crop, and perspective correction so all three agree on the same points. Not
+  /// `private` so tests can drive the geometry with exact pinned corners — including decision
+  /// #9's real-hardware noise case — without live Vision output. Still module-internal.
   struct PixelCorners {
     let topLeft: CGPoint
     let topRight: CGPoint
@@ -147,19 +203,11 @@ public enum DocumentCropper {
     )
   }
 
-  /// Estimates the quad's rotation in degrees from horizontal/vertical, averaged across
-  /// all four edges rather than read off any single edge.
-  ///
-  /// That averaging is the load-bearing part. A *real* rotated rectangle has parallel top
-  /// and bottom edges (and parallel left/right edges) — all four edges agree on the same
-  /// rotation angle. Detection noise doesn't respect that: real-hardware measurement (see
-  /// `maximumNoiseRotationDegrees`) found a confidently-detected quad on a physically
-  /// axis-aligned document with a top edge at +2.82° and a bottom edge at -0.31° — two
-  /// corners landed a few pixels off, on what turned out to be Vision's own coarse internal
-  /// quantization grid, and that alone reads as "2.8° of rotation" if you only look at the
-  /// top edge. Averaging all four edges cancels exactly that kind of per-corner noise while
-  /// still converging on the true angle for a genuinely rotated document, where every edge
-  /// already agrees.
+  /// Estimates the quad's rotation (degrees), averaged across all four edges rather than any
+  /// single one. A real rotated rectangle's edges all agree; detection noise does not. The
+  /// real-hardware case (see `maximumNoiseRotationDegrees`) had a top edge at +2.82° and a
+  /// bottom at -0.31° from per-corner quantization; averaging cancels that while still
+  /// converging on the true angle for a genuine skew, where every edge already agrees.
   static func estimatedRotationDegrees(_ corners: PixelCorners) -> Double {
     func angle(_ from: CGPoint, _ to: CGPoint) -> Double {
       Double(atan2(to.y - from.y, to.x - from.x)) * 180 / .pi
@@ -173,11 +221,9 @@ public enum DocumentCropper {
 
   // MARK: - Bounding-box crop
 
-  /// Crops to the quad's axis-aligned bounding box — no rotation, no perspective warp.
-  /// Used instead of `perspectiveCorrect` when `estimatedRotationDegrees` says the quad is
-  /// within noise of axis-aligned: there's no real skew to correct, so cropping tighter
-  /// than the bounding box would risk clipping the document, and perspective-correcting
-  /// would bake detection noise in as a fake rotation (the bug this fallback exists for).
+  /// Crops to the quad's axis-aligned bounding box — no rotation, no warp. Used when `decide`
+  /// returns `.boundingBox`: no real skew to correct, so perspective-correcting would bake
+  /// detection noise in as a fake rotation (the bug this path exists for).
   static func boundingBoxCrop(
     _ image: CGImage, corners: PixelCorners, imageExtent: CGRect
   ) -> CGImage? {
@@ -190,30 +236,165 @@ public enum DocumentCropper {
     let cropRect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
       .intersection(imageExtent)
     guard !cropRect.isEmpty else { return nil }
-
-    let ciImage = CIImage(cgImage: image)
-    let context = CIContext()
-    return context.createCGImage(ciImage, from: cropRect)
+    return CIContext().createCGImage(CIImage(cgImage: image), from: cropRect)
   }
 
   // MARK: - Perspective correction
 
-  /// `CIPerspectiveCorrection` extracts and rectifies the quadrilateral `corners`
-  /// describes into a clean axis-aligned image. Only used for quads
-  /// `estimatedRotationDegrees` judges as a real, meaningfully skewed document — see
-  /// `boundingBoxCrop` for the near-axis-aligned case.
+  /// `CIPerspectiveCorrection` rectifies the quad into a clean axis-aligned image. Only used
+  /// for quads `decide` judges as a real, in-bounds, unambiguous skew.
   private static func perspectiveCorrect(_ image: CGImage, corners: PixelCorners) -> CGImage? {
     let ciImage = CIImage(cgImage: image)
-
     guard let filter = CIFilter(name: "CIPerspectiveCorrection") else { return nil }
     filter.setValue(ciImage, forKey: kCIInputImageKey)
     filter.setValue(CIVector(cgPoint: corners.topLeft), forKey: "inputTopLeft")
     filter.setValue(CIVector(cgPoint: corners.topRight), forKey: "inputTopRight")
     filter.setValue(CIVector(cgPoint: corners.bottomLeft), forKey: "inputBottomLeft")
     filter.setValue(CIVector(cgPoint: corners.bottomRight), forKey: "inputBottomRight")
-
     guard let outputImage = filter.outputImage else { return nil }
-    let context = CIContext()
-    return context.createCGImage(outputImage, from: outputImage.extent)
+    return CIContext().createCGImage(outputImage, from: outputImage.extent)
+  }
+}
+
+// MARK: - Skew analysis (projection profile)
+
+extension DocumentCropper {
+  /// The projection-profile search result: the best angle and the two trust metrics.
+  /// `angleDegrees`' sign is the search's own projection convention (opposite Vision's); only
+  /// its magnitude is used downstream, so callers compare `abs(angleDegrees)`.
+  struct SkewEstimate {
+    let angleDegrees: Double
+    let contrast: Double
+    let secondPeakRatio: Double
+
+    /// A clean, well-defined peak: high above the noise floor with no comparable competitor.
+    var confident: Bool {
+      contrast >= minimumSkewContrast && secondPeakRatio <= maximumSecondPeakRatio
+    }
+  }
+
+  /// Finds the document's dominant skew by projection-profile analysis (Radon-transform-style):
+  /// at the true rotation, projecting edge energy onto an axis gives the sharpest profile; at
+  /// wrong angles it blurs out. The `SkewEstimate` carries the winning angle's height above the
+  /// median (`contrast`) and the best competing peak (`secondPeakRatio`) — confidence, not just
+  /// the fit, per decision #9's ±30° addendum. Deterministic (no Vision), so tests drive it.
+  static func estimateSkew(_ image: CGImage) -> SkewEstimate {
+    guard let gray = grayscaleBuffer(image, maxDimension: skewAnalysisMaxDimension) else {
+      return SkewEstimate(angleDegrees: 0, contrast: 0, secondPeakRatio: 1)
+    }
+    let edges = gradientMagnitude(gray)
+
+    var angles: [Double] = []
+    var scores: [Double] = []
+    var angle = -skewSearchLimitDegrees
+    while angle <= skewSearchLimitDegrees + 1e-9 {
+      angles.append(angle)
+      scores.append(profileSharpness(edges, thetaDegrees: angle))
+      angle += skewSearchStepDegrees
+    }
+    guard !scores.isEmpty else {
+      return SkewEstimate(angleDegrees: 0, contrast: 0, secondPeakRatio: 1)
+    }
+
+    var bestIndex = 0
+    for index in scores.indices where scores[index] > scores[bestIndex] {
+      bestIndex = index
+    }
+    let bestAngle = angles[bestIndex]
+    let peak = scores[bestIndex]
+    let median = scores.sorted()[scores.count / 2]
+
+    var competitor = 0.0
+    for index in scores.indices
+    where abs(angles[index] - bestAngle) > peakSeparationDegrees && scores[index] > competitor {
+      competitor = scores[index]
+    }
+
+    return SkewEstimate(
+      angleDegrees: bestAngle, contrast: peak / max(median, 1e-9),
+      secondPeakRatio: competitor / max(peak, 1e-9))
+  }
+
+  /// A downsampled single-channel (0...1) view of `image`, longest edge `maxDimension`.
+  private static func grayscaleBuffer(
+    _ image: CGImage, maxDimension: Int
+  ) -> (width: Int, height: Int, pixels: [Float])? {
+    let scale = min(1.0, Double(maxDimension) / Double(max(image.width, image.height)))
+    let width = max(1, Int(Double(image.width) * scale))
+    let height = max(1, Int(Double(image.height) * scale))
+    var bytes = [UInt8](repeating: 0, count: width * height)
+    let colorSpace = CGColorSpaceCreateDeviceGray()
+    let drew = bytes.withUnsafeMutableBytes { raw -> Bool in
+      guard
+        let context = CGContext(
+          data: raw.baseAddress, width: width, height: height, bitsPerComponent: 8,
+          bytesPerRow: width, space: colorSpace, bitmapInfo: CGImageAlphaInfo.none.rawValue)
+      else {
+        return false
+      }
+      context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+      return true
+    }
+    guard drew else { return nil }
+    return (width, height, bytes.map { Float($0) / 255 })
+  }
+
+  /// Sobel gradient magnitude — the edge-energy map the sweep runs over. Working from edges,
+  /// not raw intensity, makes it robust: page boundaries and text light up, flat background not.
+  private static func gradientMagnitude(
+    _ gray: (width: Int, height: Int, pixels: [Float])
+  ) -> (width: Int, height: Int, pixels: [Float]) {
+    let width = gray.width
+    let height = gray.height
+    var out = [Float](repeating: 0, count: width * height)
+    guard width >= 3, height >= 3 else { return (width, height, out) }
+    func at(_ x: Int, _ y: Int) -> Float { gray.pixels[y * width + x] }
+    for y in 1..<(height - 1) {
+      for x in 1..<(width - 1) {
+        let gx =
+          (at(x + 1, y - 1) + 2 * at(x + 1, y) + at(x + 1, y + 1))
+          - (at(x - 1, y - 1) + 2 * at(x - 1, y) + at(x - 1, y + 1))
+        let gy =
+          (at(x - 1, y + 1) + 2 * at(x, y + 1) + at(x + 1, y + 1))
+          - (at(x - 1, y - 1) + 2 * at(x, y - 1) + at(x + 1, y - 1))
+        out[y * width + x] = (gx * gx + gy * gy).squareRoot()
+      }
+    }
+    return (width, height, out)
+  }
+
+  /// Projects `edges` onto the axis perpendicular to lines at `thetaDegrees` and returns the
+  /// profile's sharpness (sum of squared adjacent-bin differences). Maximal where edges align
+  /// into steep steps; small where a rotated edge smears across many bins.
+  private static func profileSharpness(
+    _ edges: (width: Int, height: Int, pixels: [Float]), thetaDegrees: Double
+  ) -> Double {
+    let theta = thetaDegrees * .pi / 180
+    let sinT = sin(theta)
+    let cosT = cos(theta)
+    let width = edges.width
+    let height = edges.height
+    let centerX = Double(width) / 2
+    let centerY = Double(height) / 2
+    let binCount = Int((Double(width) * abs(sinT) + Double(height) * abs(cosT)).rounded()) + 2
+    guard binCount > 2 else { return 0 }
+    let offset = Double(binCount) / 2
+    var profile = [Double](repeating: 0, count: binCount)
+    for y in 0..<height {
+      let dy = Double(y) - centerY
+      for x in 0..<width {
+        let magnitude = edges.pixels[y * width + x]
+        if magnitude == 0 { continue }
+        let dx = Double(x) - centerX
+        let bin = Int(-dx * sinT + dy * cosT + offset)
+        if bin >= 0 && bin < binCount { profile[bin] += Double(magnitude) }
+      }
+    }
+    var sharpness = 0.0
+    for bin in 1..<binCount {
+      let delta = profile[bin] - profile[bin - 1]
+      sharpness += delta * delta
+    }
+    return sharpness
   }
 }

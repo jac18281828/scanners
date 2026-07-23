@@ -118,6 +118,64 @@ Scanners.app
    by this — it already worked from the corrected output image's dimensions regardless of
    which correction path produced them.
 
+   **Addendum (post-v0.1.0 bug fix): perspective correction was corrupting genuinely-skewed
+   real documents, and had no upper bound.** John placed an American Express benefits insert
+   (plain text, plus a high-contrast "MORE SALT, NOT LESS" sticker in one corner) on the bed
+   at a deliberate real angle. At 300dpi Text mode `perspectiveCorrect` ran and produced
+   visibly warped, garbled, unreadable output (worse than doing nothing); the corner sticker
+   sheared into a black wedge while the text stayed crooked — a keystone warp, same family as
+   the noise bug above but from a *real* skew fed a bad quad. At 600dpi the raw crooked bed
+   came back uncorrected. Root cause, reproduced against the real 600dpi scan
+   (`cell9-docB-image-600-color.jpg`) and synthetic fixtures: the fix above snapped ≤2° to a
+   bbox but ran `CIPerspectiveCorrection` on **anything** above 2°, unconditionally, on
+   whatever quad Vision returned — and Vision confidently (0.90+) returns quads dragged off
+   the true page boundary when a contrasting sub-region (the sticker) fights the page's own
+   edges, and confidently detects steep skews (measured 0.95 at 35°, 0.91 at 38°) that have no
+   business being auto-straightened at all.
+
+   Decision (John, finalized after discussion): **cap rotation correction to ±30° from
+   upright, and gate correction on confidence in the fit, not just the fit.** The cap is a
+   scope bound — auto-straightening rescues *accidental* skew from ordinary placement (a few
+   degrees up to ~20–30°), not arbitrary rotation. One geometric rule covers both failure
+   modes past the bound without the app guessing intent: a page carelessly slapped down at a
+   big angle is better re-placed (the app won't try to rescue it), and a document
+   *intentionally* scanned steep (e.g. a diagonally mounted bumper sticker) is left exactly
+   as-is, undistorted, at its true angle. OCR / text-orientation ("is this text upright") was
+   explicitly considered as a signal for the ambiguous cases and **rejected as out of scope**:
+   it only helps Text mode not Image mode, and duplicates the separate OCR pass that already
+   runs later for Text-mode PDFs. The logic stays purely geometric.
+
+   Fix implemented (`DocumentCropper`): the ≤2° noise→bbox path is untouched. Above 2° and up
+   to the ±30° cap (`maximumCorrectionDegrees`), a new projection-profile skew analysis
+   (`estimateSkew`, Radon-transform-style: Sobel edge map, downsampled to 400px, swept over
+   ±35° in 1° steps, scoring each angle by its projection profile's sharpness) decides whether
+   there's a **clean, unambiguous, well-defined** skew peak. It's accepted (→
+   `CIPerspectiveCorrection`) only when the peak stands well above the median
+   (`minimumSkewContrast`), has no comparable competing peak at another angle
+   (`maximumSecondPeakRatio` — the load-bearing ambiguity gate), and agrees with Vision's own
+   quad rotation. Otherwise, and unconditionally above ±30° no matter how confident any signal
+   looks, `crop` falls back to the untouched full upright bed — same contract as "no document
+   detected." This satisfies John's two worked examples: a clean card at 3° shows one sharp
+   confident peak → corrected at 3°; the benefits page, whose sticker edges run at a different
+   angle than the page, produces two comparable peaks → no confident peak → falls back to
+   upright rather than force a wrong rotation. The gate/decision logic (`estimateSkew`,
+   `decide`) is pure and deterministic (no live Vision), unit-tested against exact inputs.
+
+   Verification: reproduced against the real 600dpi benefits scan
+   (`cell9-docB-image-600-color.jpg`, 5100×7033) — Vision returns confidence 0.00 on it (the
+   white-page-on-light-platen boundary is invisible to segmentation) and `estimateSkew` reads
+   contrast 16.5 (below the floor), so `crop` correctly returns the full untouched bed, matching
+   the observed 600dpi behaviour. The 300dpi warp was reproduced on a synthetic
+   conflicting-content fixture (page text at one angle, a bold high-contrast striped block at
+   another): pre-fix `CIPerspectiveCorrection` sheared it exactly like John's PDF (corner block
+   → wedge, text still crooked); post-fix it falls back to upright. Regression + new tests
+   (`DocumentCropperTests`, `DocumentCropperSkewTests`) cover: ≤2° noise→bbox unchanged; clean
+   15° and 28° → confident correction; 35° (still confidently detected by Vision) → capped
+   fallback; conflicting content → ambiguity fallback; plus deterministic `estimateSkew`/
+   `decide` unit tests for each gate. Tuning note: the contrast/second-peak thresholds are
+   calibrated on synthetic fixtures and one real scan, not a corpus — revisit against
+   real-world use, same caveat as `minimumConfidence`.
+
 ## Product behavior
 
 - **Two modes.** Text: default 300dpi B&W; also color; dpi 75/150/300/600.
