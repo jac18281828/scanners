@@ -23,10 +23,11 @@ struct ContentView: View {
         }
       )
       .padding()
-      // Soft native grey, not white — distinguishes the control strip from the canvas
-      // below it the way a real toolbar region reads in Preview/Notes/Photos. Semantic
-      // NSColor, so it tracks light/dark automatically.
-      .background(Color(nsColor: .windowBackgroundColor))
+      // Soft grey-on-cream, not white — distinguishes the control strip from the canvas
+      // below it the way a real toolbar region reads in Preview/Notes/Photos. `ChromeColor`,
+      // not the bare semantic `.windowBackgroundColor` this used before: see its doc comment
+      // for why the semantic color alone wasn't actually reading as grey on real hardware.
+      .background(ChromeColor.background)
 
       Divider()
 
@@ -36,10 +37,10 @@ struct ContentView: View {
         if showsPageStrip {
           PageStripView(session: session, selectedPageID: $selectedPageID)
             .frame(minWidth: 160, idealWidth: 180, maxWidth: 260)
-            // Same grey as the control strip: the page strip is chrome around the
-            // document, not part of the page content itself, so it shouldn't compete
-            // visually with the near-white canvas.
-            .background(Color(nsColor: .windowBackgroundColor))
+            // Same chrome tone as the control strip (including the empty "No pages yet"
+            // state) — the page strip is chrome around the document, not part of the page
+            // content itself, so it shouldn't compete visually with the near-white canvas.
+            .background(ChromeColor.background)
         }
       }
 

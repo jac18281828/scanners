@@ -21,8 +21,10 @@ struct PageStripView: View {
     .listStyle(.sidebar)
     // `.sidebar` style's vibrant grey backing normally comes from being hosted inside a
     // NavigationSplitView; standing alone in an HSplitView it renders flat/white instead.
-    // Hide the List's own background and let the grey `.windowBackgroundColor` ContentView
-    // put behind this view show through, so it still reads as a sidebar.
+    // Hide the List's own background and let `ChromeColor.background` (ContentView puts it
+    // behind this view) show through instead, so it still reads as a sidebar — including in
+    // the empty "No pages yet" state, which is exactly what was flat white before that color
+    // existed.
     .scrollContentBackground(.hidden)
     .onDeleteCommand {
       guard let selectedPageID else { return }

@@ -63,11 +63,12 @@ struct SettingsView: View {
     }
     // .grouped: the soft inset-grey look System Settings.app itself uses, rather than
     // Form's plain/flat default — matches the rest of the window's grey-on-cream
-    // hierarchy instead of reading as a stray white sheet.
+    // hierarchy instead of reading as a stray white sheet. `ChromeColor`, not the bare
+    // semantic `.windowBackgroundColor` — see its doc comment.
     .formStyle(.grouped)
     .padding(20)
     .frame(width: 420)
-    .background(Color(nsColor: .windowBackgroundColor))
+    .background(ChromeColor.background)
   }
 
   @ViewBuilder
