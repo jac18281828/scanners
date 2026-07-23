@@ -118,6 +118,38 @@ rescanned at 1200dpi):
   instantly, no banner (correct — cancellation isn't an error), no partial page added.
 - A normal scan run immediately afterward completed correctly — "next scan works" confirmed.
 
+## Post-fix re-verification: DocumentCropper rotation/skew correction (commit `ae51418`)
+
+A separate agent root-caused and fixed the `DocumentCropper` bug John found mid-phase
+(unconditional perspective correction warping real skewed documents — see Deviations below
+for how that was originally discovered and handed off). Once that commit landed on `main`
+this agent independently re-verified it against real hardware, not just by trusting the
+other agent's own test run:
+
+- Pulled `ae51418`, confirmed locally: `swift build` clean (0 warnings), `swift test` →
+  **125 tests pass** (106 baseline + 6 Cell-10-fix + 13 new crop-skew tests), `swiftlint
+  --strict`/`swift-format --strict` both clean.
+- Rebuilt and reinstalled the app, then re-scanned **the exact real physical item** behind
+  the original bug report — still sitting on the bed from John's own repro: a card-terms
+  insert (plain rotated text) with a high-contrast "MORE SALT, NOT LESS" sticker at a
+  visibly different angle in one corner — via the real GUI, Text/300dpi/Color (the same
+  mode/dpi as the original failure).
+- Result: `cell9-crop-fix-repro.pdf`, page size 215.9×297.77mm — essentially the full bed,
+  confirming the fix's fallback path fired (ambiguous/conflicting skew signals between the
+  sticker and the page → falls back to the untouched full bed, per the fix's documented
+  behavior) rather than forcing a correction. Rendered the page
+  (`cell9-crop-fix-repro-render.png`) and visually compared it against the raw pre-crop bed
+  scan (`bed-check2.png`, same session): **identical framing, no warping, no shearing, no
+  garbled/wedge-shaped content** — the previous bug's exact failure signature is gone. This
+  is the correct, safe outcome for genuinely conflicting skew evidence, not a missed crop.
+- Did not additionally re-verify the "clean single dominant peak gets corrected" path
+  (e.g. a card at a real 3° skew) against real hardware in this pass — that path is covered
+  by the other agent's own new real-hardware-and-synthetic tests
+  (`DocumentCropperSkewTests.swift`: a real 15° skew and a 28° skew, both perspective-
+  corrected correctly) and re-running it would need placing a new item at a controlled angle,
+  which this agent cannot do without hands; the fallback path above is the one directly tied
+  to John's original real bug report, and is the one re-verified here on real hardware.
+
 ## Deviations / limitations
 
 - **Multi-page cells (1, 3, 9) reused identical physical content per page.** The agent
@@ -148,11 +180,11 @@ rescanned at 1200dpi):
   completed, to free the machine for other work overnight — not a crash. That run's output
   was never saved and was discarded; Cell 8 was independently re-run from scratch (twice —
   see "Cell 8 detail" above) once hardware access resumed.
-- **A separate, real correctness bug was found during this phase and is being fixed by
-  another agent, not this report:** John reported a scanned document coming out visibly
-  rotated/distorted in `DocumentCropper`'s perspective-correction path for a
-  non-axis-aligned real item. Per explicit instruction this agent did not investigate or
-  modify `Sources/OutputKit/DocumentCropper.swift` — confirmed via `git status`/`git diff`
-  throughout this report's own commits, that file is untouched by any commit referenced
-  here. v1.0.0 is being held until that fix lands and is integrated; see the phase's final
-  report for status.
+- **A separate, real correctness bug was found during this phase and fixed by another
+  agent, not this report** (this agent did not investigate or modify
+  `Sources/OutputKit/DocumentCropper.swift` at any point, per explicit instruction —
+  confirmed via `git status`/`git diff` throughout every commit this agent made): John
+  reported a scanned document coming out visibly rotated/distorted in `DocumentCropper`'s
+  perspective-correction path for a non-axis-aligned real item. Fixed in commit `ae51418`
+  and independently re-verified against real hardware by this agent — see "Post-fix
+  re-verification" above.
