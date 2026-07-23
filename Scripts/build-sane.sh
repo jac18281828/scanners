@@ -25,6 +25,14 @@ LIBUSB_VERSION="1.0.30"
 LIBUSB_URL="https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2"
 LIBUSB_SHA256="fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf"
 
+# Must match Package.swift's `.macOS(.v14)` platform floor. Without this, configure
+# picks up whatever macOS SDK version is ambient on the build machine's Xcode (LC_BUILD_VERSION
+# minos), and `swift build`/`swift run` emit an ld warning for every executable that
+# links these dylibs ("building for macOS-14.0, but linking with dylib ... built for
+# newer version"). Export before both libusb's and sane-backends' configure/make so it
+# reaches every compile+link step (autoconf respects MACOSX_DEPLOYMENT_TARGET natively).
+export MACOSX_DEPLOYMENT_TARGET="14.0"
+
 # ---------------------------------------------------------------------------
 # Layout
 # ---------------------------------------------------------------------------
