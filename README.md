@@ -35,8 +35,9 @@ No Homebrew, no SANE install, no driver package — `Scanners.app` carries its o
 - **Likely to work** (same `hp5590` backend family, not individually tested): HP
   ScanJet 4500C, 5500C, 5550C, 5590, 7650.
 - Any scanner connected via USB and enumerable by SANE's `hp5590` backend should work.
-  Other SANE backends are not bundled — see [Build from source](#build-from-source) if
-  you need one.
+  Other SANE backends are not bundled — see
+  [#1](https://github.com/jac18281828/scanners/issues/1) for what's involved in adding
+  one (it's more than a config flag; scope and risks documented there).
 
 ## Usage
 
