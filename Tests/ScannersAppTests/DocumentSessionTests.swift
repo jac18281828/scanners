@@ -123,12 +123,12 @@ struct DocumentSessionTests {
   )
   func applyPresetSetsAllFourValues() {
     let session = DocumentSession(documentMode: .text)
-    // .archive is image/2400/color/tiff.
+    // .archive is image/1200/color/tiff.
     let changed = session.requestApplyPreset(.archive, confirmDiscard: { true })
 
     #expect(changed)
     #expect(session.documentMode == .image)
-    #expect(session.dpi == 2400)
+    #expect(session.dpi == 1200)
     #expect(session.colorMode == .color)
     #expect(session.currentImageFormat == .tiff)
   }
