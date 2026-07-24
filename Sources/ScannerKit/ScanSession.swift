@@ -74,12 +74,28 @@ public struct ScanSession: Sendable {
     do {
       let hardwareDPI = try await negotiateOptions(
         handle: handle, backend: backend, runner: runner, config: config)
+
+      // `sane_get_parameters` is only guaranteed accurate *after* `sane_start`: before start,
+      // `lines` may be -1 (unknown — legal for some sources) or an estimate, and the geometry
+      // can be revised at start. So start first, then read the parameters that actually drive
+      // allocation and decoding, rather than trusting pre-start values (a pre-start `lines ==
+      // -1` would trap the lineart intermediate buffer's `repeating:count:` allocation).
+      try await runner.run { try backend.start(handle) }
       let params = try await runner.run { try backend.parameters(handle) }
 
       guard params.lastFrame else {
         throw ScanError.ioError(
           "hp5590 emitted a multi-frame scan (last_frame=false after the first frame) — "
             + "unsupported; escalate per Phase 3 spec rather than guessing a decoder."
+        )
+      }
+
+      // Defence-in-depth against a non-conformant backend: negative dimensions would trap the
+      // decode's buffer allocation and produce a bogus over-allocation for `reserveCapacity`.
+      guard params.pixelsPerLine >= 0, params.lines >= 0, params.bytesPerLine >= 0 else {
+        throw ScanError.ioError(
+          "device reported invalid frame dimensions (pixelsPerLine=\(params.pixelsPerLine), "
+            + "lines=\(params.lines), bytesPerLine=\(params.bytesPerLine))"
         )
       }
 
@@ -100,23 +116,10 @@ public struct ScanSession: Sendable {
         )
       )
 
-      try await runner.run { try backend.start(handle) }
-
       let totalBytes = Int(params.bytesPerLine) * Int(params.lines)
-      var pixelData = [UInt8]()
-      pixelData.reserveCapacity(max(totalBytes, 0))
-
-      while true {
-        try Task.checkCancellation()
-        let result = try await runner.run { try backend.read(handle, maxLength: readChunkSize) }
-        pixelData.append(contentsOf: result.bytes)
-        if totalBytes > 0 {
-          continuation.yield(.progress(min(1.0, Double(pixelData.count) / Double(totalBytes))))
-        }
-        if result.reachedEOF {
-          break
-        }
-      }
+      let pixelData = try await readFrameBytes(
+        handle: handle, backend: backend, runner: runner, totalBytes: totalBytes,
+        continuation: continuation)
 
       let image = try FrameDecoder.decode(bytes: pixelData, params: params)
       continuation.yield(
@@ -138,6 +141,33 @@ public struct ScanSession: Sendable {
       await runner.run { backend.close(handle) }
       throw error
     }
+  }
+
+  /// Reads the started scan to EOF on the shared runner, yielding `.progress` as bytes
+  /// accumulate, and returns the full frame. `Task.checkCancellation` runs between chunks, so
+  /// cancellation is honored at chunk boundaries (see `SaneRunner`'s serial-queue note for the
+  /// blocked-read caveat).
+  private static func readFrameBytes(
+    handle: SaneHandle,
+    backend: any SaneBackend,
+    runner: SaneRunner,
+    totalBytes: Int,
+    continuation: AsyncThrowingStream<ScanEvent, Error>.Continuation
+  ) async throws -> [UInt8] {
+    var pixelData = [UInt8]()
+    pixelData.reserveCapacity(max(totalBytes, 0))
+    while true {
+      try Task.checkCancellation()
+      let result = try await runner.run { try backend.read(handle, maxLength: readChunkSize) }
+      pixelData.append(contentsOf: result.bytes)
+      if totalBytes > 0 {
+        continuation.yield(.progress(min(1.0, Double(pixelData.count) / Double(totalBytes))))
+      }
+      if result.reachedEOF {
+        break
+      }
+    }
+    return pixelData
   }
 
   // MARK: - Option negotiation
