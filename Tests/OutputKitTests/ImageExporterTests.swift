@@ -89,4 +89,48 @@ struct ImageExporterTests {
   func defaultJPEGQuality() {
     #expect(ImageExporter.defaultJPEGQuality == 0.85)
   }
+
+  private static func bitsPerComponent(_ data: Data) -> Int? {
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+      let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+    else {
+      return nil
+    }
+    return properties[kCGImagePropertyDepth] as? Int
+  }
+
+  private static func blackAndWhitePage() -> ScannedPage {
+    let size = Fixtures.PageSize(
+      widthPixels: 400, heightPixels: 500, widthMM: 100, heightMM: 125)
+    return Fixtures.solidPage(
+      size: size, requestedDPI: 100, hardwareDPI: 100, mode: .blackAndWhite, gray: 255)
+  }
+
+  @Test("PNG export of a black-and-white page packs to true 1-bit-per-pixel, not 8-bit")
+  func pngExportPacksBlackAndWhiteTo1Bit() throws {
+    let data = try ImageExporter.pngData(for: Self.blackAndWhitePage())
+    #expect(Self.bitsPerComponent(data) == 1)
+  }
+
+  @Test("TIFF export of a black-and-white page packs to true 1-bit-per-pixel, not 8-bit")
+  func tiffExportPacksBlackAndWhiteTo1Bit() throws {
+    let data = try ImageExporter.tiffData(for: Self.blackAndWhitePage())
+    #expect(Self.bitsPerComponent(data) == 1)
+  }
+
+  @Test("PNG export of a color page stays 8-bit -- packing is only for black-and-white")
+  func pngExportColorStays8Bit() throws {
+    let data = try ImageExporter.pngData(for: Self.page())
+    #expect(Self.bitsPerComponent(data) == 8)
+  }
+
+  @Test("PNG export of a gray page stays 8-bit -- Gray is real luminance, not bilevel")
+  func pngExportGrayStays8Bit() throws {
+    let size = Fixtures.PageSize(
+      widthPixels: 400, heightPixels: 500, widthMM: 100, heightMM: 125)
+    let page = Fixtures.solidPage(
+      size: size, requestedDPI: 100, hardwareDPI: 100, mode: .gray, gray: 180)
+    let data = try ImageExporter.pngData(for: page)
+    #expect(Self.bitsPerComponent(data) == 8)
+  }
 }
