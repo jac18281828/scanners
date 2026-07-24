@@ -53,8 +53,17 @@ public enum DocumentExporter {
 
   /// Same as `suggestedFilename`, without the extension — the image save panel updates the
   /// extension live as the user changes the format picker, so it needs a bare base name.
-  public static func suggestedBaseName(settings: AppSettings, date: Date = Date()) -> String {
-    URL(fileURLWithPath: suggestedFilename(ext: "tmp", settings: settings, date: date))
+  ///
+  /// `ext` must be the *real* extension the panel will open with (the default format's), not a
+  /// sentinel: `FilenameTemplate.nextFilename` avoids collisions by comparing the full name
+  /// *including extension* against the folder, so a placeholder like `"tmp"` (which never
+  /// matches any real `.jpg`/`.png`/`.tiff` on disk) makes collision avoidance silently do
+  /// nothing and always return sequence `001` — pre-filling the panel with a name that points
+  /// at an existing image and inviting an accidental overwrite.
+  public static func suggestedBaseName(ext: String, settings: AppSettings, date: Date = Date())
+    -> String
+  {
+    URL(fileURLWithPath: suggestedFilename(ext: ext, settings: settings, date: date))
       .deletingPathExtension()
       .lastPathComponent
   }
@@ -114,11 +123,14 @@ public enum DocumentExporter {
   @discardableResult
   public static func saveImage(session: DocumentSession, settings: AppSettings) throws -> URL? {
     guard let entry = imagePageToExport(session: session) else { throw ExportError.emptyDocument }
-    let baseName = suggestedBaseName(settings: settings)
+    // Suggest the base name against the format the panel actually opens with, so the sequence
+    // number advances past an existing file of that type rather than colliding with it.
+    let defaultFormat = defaultImageFormat(session: session)
+    let baseName = suggestedBaseName(ext: defaultFormat.fileExtension, settings: settings)
     guard
       let (url, format) = SavePanel.presentImagePanel(
         suggestedBaseName: baseName, directory: settings.saveFolder,
-        defaultFormat: defaultImageFormat(session: session))
+        defaultFormat: defaultFormat)
     else { return nil }
     let data = try format.encode(entry.page)
     try data.write(to: url)

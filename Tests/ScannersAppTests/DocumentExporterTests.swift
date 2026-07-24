@@ -123,7 +123,7 @@ struct DocumentExporterTests {
     let session = DocumentSession(documentMode: .text)
     #expect(DocumentExporter.defaultImageFormat(session: session) == .jpeg)  // untouched default
 
-    session.requestApplyPreset(.archive, confirmDiscard: { true })  // image/2400/color/tiff
+    session.requestApplyPreset(.archive, confirmDiscard: { true })  // image/1200/color/tiff
 
     #expect(DocumentExporter.defaultImageFormat(session: session) == .tiff)
   }
@@ -131,7 +131,30 @@ struct DocumentExporterTests {
   @Test("suggestedBaseName strips the extension so the image format picker can swap it live")
   func suggestedBaseNameHasNoExtension() {
     let settings = AppSettings(defaults: TestFixtures.isolatedDefaults())
-    let base = DocumentExporter.suggestedBaseName(settings: settings)
+    let base = DocumentExporter.suggestedBaseName(ext: "jpg", settings: settings)
     #expect(!base.contains("."))
+  }
+
+  @Test(
+    "suggestedBaseName advances past an existing image file of the target format (regression: passing a sentinel \"tmp\" extension defeated collision avoidance, so the image panel kept suggesting an existing file's name and invited an overwrite)"
+  )
+  func suggestedBaseNameAvoidsExistingImageFile() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "scanners-basename-test-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+
+    let settings = AppSettings(defaults: TestFixtures.isolatedDefaults())
+    settings.saveFolder = folder
+
+    // Put the app's own first suggestion on disk, as a real .jpg, then ask again: the base
+    // name must not point back at that existing file.
+    let firstFull = DocumentExporter.suggestedFilename(ext: "jpg", settings: settings)
+    try Data().write(to: folder.appendingPathComponent(firstFull))
+
+    let base = DocumentExporter.suggestedBaseName(ext: "jpg", settings: settings)
+    #expect("\(base).jpg" != firstFull)
+    // The bug (ext: "tmp") always returned sequence 001; the fix advances to 002.
+    #expect(base.hasSuffix("-002"))
   }
 }
