@@ -4,13 +4,15 @@ import Testing
 @testable import OutputKit
 @testable import ScannerKit
 
-/// `contentExtentCrop`'s use of `estimateSkew`/`rotated` to straighten a page before cropping to
-/// it. This replaced an earlier border-line estimator that measured well on synthetic fixtures
-/// but, on a real scan, turned out to be reading a scanner bed-frame artifact rather than the
-/// page (see `contentExtentCrop`'s doc comment) -- so this suite deliberately checks the sign
-/// convention and confidence gate empirically, the same way that estimator's checks were done,
-/// rather than trusting `estimateSkew`'s existing use on the confident-Vision path (which only
-/// ever consumes it via `abs()`, never as an applied rotation) to mean the sign is already known.
+/// `estimateSkew`/`rotated`'s own behavior in isolation -- sign convention, confidence gate,
+/// and (via `contentSkewIsMisreadAsPageSkew`) the reason `contentExtentCrop` no longer calls
+/// them: `estimateSkew` measures dominant content orientation, not the physical page boundary,
+/// and those aren't the same thing (see `contentExtentCrop`'s doc comment). This suite checks
+/// the machinery empirically -- the same way the deleted border-line estimator's claims were
+/// checked before it turned out to be reading a scanner bed-frame artifact rather than the page
+/// -- rather than trusting `estimateSkew`'s use on the confident-Vision path (which only ever
+/// consumes it via `abs()` as a corroboration check against Vision's own quad, never as a
+/// standalone applied rotation) to mean its behavior is already known everywhere it's used.
 @Suite("DocumentCropper content-extent fallback: skew-based straightening")
 struct DocumentCropperFallbackSkewTests {
   private static func grayscaleImage(
@@ -74,8 +76,8 @@ struct DocumentCropperFallbackSkewTests {
     #expect(!skew.confident)
   }
 
-  @Test("contentExtentCrop straightens a tilted page before cropping to its content")
-  func contentExtentCropStraightensPage() {
+  @Test("contentExtentCrop crops to content but leaves a tilted page's rotation untouched")
+  func contentExtentCropDoesNotRotate() {
     let width = 500
     let height = 700
     let hardwareDPI = 300
@@ -87,10 +89,60 @@ struct DocumentCropperFallbackSkewTests {
 
     let result = DocumentCropper.contentExtentCrop(page)
     #expect(result.image.width < width, "expected a tighter crop than the full canvas")
+    // No physical page-edge measurement exists in this fallback (see contentExtentCrop's doc
+    // comment) -- estimateSkew's content-orientation read is not trusted to rotate on its own,
+    // so a genuinely tilted page stays tilted; only the crop tightens.
     let residual = DocumentCropper.estimateSkew(result.image)
     #expect(
-      abs(residual.angleDegrees) < 2.0,
-      "expected the crop to be straightened, residual was \(residual.angleDegrees)deg")
+      abs(abs(residual.angleDegrees) - 6) < 2.0,
+      "expected the crop to leave the original ~6deg tilt intact, residual was \(residual.angleDegrees)deg"
+    )
+  }
+
+  @Test(
+    "ruled content printed at an angle on an upright page is misread as page skew (known limitation)"
+  )
+  func contentSkewIsMisreadAsPageSkew() {
+    let width = 500
+    let height = 700
+    // No outer page boundary is drawn at all -- deliberately, since real scans on this
+    // hardware already give estimateSkew essentially no page-vs-platen edge signal (that's
+    // why Vision's segmentation model fails here too, see minimumConfidence's doc comment).
+    // The only edges in this image are ruled lines at a genuine content angle, on a page that
+    // is itself perfectly upright. estimateSkew has no independent signal for where the true
+    // page boundary is, so it cannot distinguish "the page is rotated" from "the page is
+    // straight but its content isn't" -- both look identical to a whole-frame edge-orientation
+    // search. This is a real false-positive risk (rotating an already-straight page), not a
+    // hypothetical: asserted here so it's measured, not assumed. It's the reason a page-edge
+    // signal (immune to interior content orientation) has to gate estimateSkew before it's
+    // trusted to correct on its own -- see contentExtentCrop's doc comment.
+    let contentDegrees: Double = 5
+    let image = Self.grayscaleImage(width: width, height: height, background: 0.95) { context in
+      context.saveGState()
+      context.translateBy(x: CGFloat(width) / 2, y: CGFloat(height) / 2)
+      context.rotate(by: CGFloat(contentDegrees * .pi / 180))
+      context.setStrokeColor(gray: 0.1, alpha: 1)
+      context.setLineWidth(4)
+      let lineHalfWidth = Double(width) * 0.35
+      var y = -Double(height) * 0.3
+      while y <= Double(height) * 0.3 {
+        context.move(to: CGPoint(x: -lineHalfWidth, y: y))
+        context.addLine(to: CGPoint(x: lineHalfWidth, y: y))
+        context.strokePath()
+        y += 40
+      }
+      context.restoreGState()
+    }
+
+    let skew = DocumentCropper.estimateSkew(image)
+    #expect(
+      skew.confident,
+      "documenting the false positive: ruled content at a clean angle currently reads as a confident skew even though the page itself is upright"
+    )
+    #expect(
+      abs(abs(skew.angleDegrees) - contentDegrees) < 1.0,
+      "expected the content's own angle to be recovered as if it were page skew, got \(skew.angleDegrees)deg"
+    )
   }
 
   @Test("contentExtentCrop leaves an unresolvable page unrotated rather than guess")

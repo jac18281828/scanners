@@ -12,56 +12,51 @@ extension DocumentCropper {
   /// own printed content (text, graphics -- anything dark enough to register), which stays
   /// reliably high-contrast against white paper regardless of platen lighting.
   ///
-  /// Straightens via `estimateSkew` before finding the content box (see `straightened` below) --
-  /// the same projection-profile analysis the confident-Vision path already trusts, gated the
-  /// same way (`SkewEstimate.confident`). An earlier version of this fallback used a bespoke
-  /// border-line estimator (sample the page's physical edge shadow in a thin band near the
-  /// image's top/bottom border, on the theory that a physical-edge signal can't be fooled by a
-  /// crooked sticker the way whole-page content orientation can). That measured well in
-  /// isolation but turned out to be reading a scanner bed-frame artifact, not the page: on this
-  /// hardware the artifact is a 1-2px sliver confined to the image's absolute bottom-left corner
-  /// (verified against a real scan: matched points spanned only the leftmost ~17% of the width,
-  /// in the buffer's literal last two rows), always near 0°, so the estimator confidently
-  /// reported "no rotation" on every scan regardless of the page's true tilt -- the exact
-  /// "thin sliver hugging the border" signature `dropBorderSlivers` already exists to exclude
-  /// elsewhere in this file, which the border-line path never applied. `estimateSkew` doesn't
-  /// have this failure mode (verified against the same real scan: it recovers the page's actual
-  /// ~4° tilt with high confidence) and its sticker-page caveat is exactly the case this
-  /// fallback needs to stay conservative about -- `maximumSecondPeakRatio` rejects a page with a
-  /// competing high-contrast sub-region the same way it already does on the confident-Vision
-  /// path.
+  /// Crops to content only -- no rotation. Two earlier approaches to straightening this
+  /// fallback were tried and both rejected, for the same underlying reason: neither measures
+  /// the physical page, so neither can tell "the page was placed crooked" (a scanning artifact,
+  /// fair to correct) apart from "the page is straight but what's printed on it isn't" (a
+  /// property of the source document, not this app's to correct -- someone rescanning a
+  /// generation-old skewed photocopy wants the page they placed, upright, not a guess at what
+  /// the original was "supposed" to look like; that's Photoshop's job, not a scanner's). A
+  /// bespoke border-line estimator (sample the page's physical edge shadow in a thin band near
+  /// the image's border) measured well in isolation but turned out to be reading a scanner
+  /// bed-frame artifact, not the page -- a 1-2px sliver confined to the image's absolute
+  /// bottom-left corner, always near 0° regardless of the page's true tilt (the exact "thin
+  /// sliver hugging the border" signature `dropBorderSlivers` exists to exclude elsewhere in
+  /// this file, which that estimator never applied). `estimateSkew` (a whole-frame
+  /// projection-profile analysis of edge orientation) was tried next and does recover a
+  /// tilted page's actual angle with high confidence -- but it measures dominant *content*
+  /// orientation, not the page's physical boundary, and those aren't the same thing: ruled
+  /// lines, a table, or any content printed at a genuine angle on an otherwise perfectly
+  /// upright page reads as a clean, unambiguous, confident skew and would rotate a page that
+  /// never needed correcting (`DocumentCropperFallbackSkewTests.contentSkewIsMisreadAsPageSkew`
+  /// proves this against the shipped code, not just in theory). There's no way to tell from
+  /// pixels alone whether a dominant off-axis signal is the page's placement or the page's
+  /// content -- unsolvable without a genuine physical-boundary measurement, which this fallback
+  /// doesn't have (unlike the confident-Vision path above, where Vision's quad *is* that
+  /// measurement and `estimateSkew` only ever has to agree with it, never stand alone).
+  /// `estimateSkew`/`rotated` stay in this file for that reason: they're the right shape for a
+  /// future physical-edge detector to corroborate against, just not sufficient on their own.
   static func contentExtentCrop(_ page: ScannedPage) -> ScannedPage {
-    let workingImage = straightened(page.image) ?? page.image
-    guard let box = contentExtentBox(workingImage) else { return page }
-    let extent = CGRect(x: 0, y: 0, width: workingImage.width, height: workingImage.height)
+    guard let box = contentExtentBox(page.image) else { return page }
+    let extent = CGRect(x: 0, y: 0, width: page.image.width, height: page.image.height)
     let paddingPixels = contentExtentPaddingMM / 25.4 * Double(page.hardwareDPI)
     let padded = box.insetBy(dx: -paddingPixels, dy: -paddingPixels).intersection(extent)
     guard !padded.isEmpty else { return page }
 
     // The box's own corners are the crop -- reuses `boundingBoxCrop` exactly as the
-    // confident-Vision path does, just fed an axis-aligned box instead of a Vision quad. Any
-    // rotation was already applied by `straightened` above, so this stays axis-aligned.
+    // confident-Vision path does, just fed an axis-aligned box instead of a Vision quad.
     let corners = PixelCorners(
       topLeft: CGPoint(x: padded.minX, y: padded.maxY),
       topRight: CGPoint(x: padded.maxX, y: padded.maxY),
       bottomLeft: CGPoint(x: padded.minX, y: padded.minY),
       bottomRight: CGPoint(x: padded.maxX, y: padded.minY))
-    guard let corrected = boundingBoxCrop(workingImage, corners: corners, imageExtent: extent)
+    guard let corrected = boundingBoxCrop(page.image, corners: corners, imageExtent: extent)
     else {
       return page
     }
     return repackaged(page, corrected: corrected) ?? page
-  }
-
-  /// Straightens `image` via `estimateSkew` before extent analysis -- nil (no rotation applied,
-  /// `contentExtentCrop` falls back to the original image) if the profile search isn't confident
-  /// (see `SkewEstimate.confident`), the angle is a no-op, or the rotation transform itself
-  /// degenerates. `contentExtentBox` and the padding/crop then run against the corrected image,
-  /// so the final crop is both tight and upright, not just tight.
-  private static func straightened(_ image: CGImage) -> CGImage? {
-    let skew = estimateSkew(image)
-    guard skew.confident, skew.angleDegrees != 0 else { return nil }
-    return rotated(image, byDegrees: skew.angleDegrees)
   }
 
   /// Rotates `image` about its own center by `degrees` (standard CCW-positive convention),
