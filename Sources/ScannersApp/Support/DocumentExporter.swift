@@ -65,7 +65,9 @@ public enum DocumentExporter {
   }
 
   /// Presents the PDF save panel, writes the file, marks `session` saved. `nil` means the
-  /// user cancelled the panel — not an error.
+  /// user cancelled the panel — not an error. `settings.saveFolder` is updated to wherever
+  /// the panel actually saved, so a user who navigates elsewhere in the panel doesn't have
+  /// to renavigate there on the next save.
   @discardableResult
   public static func savePDF(session: DocumentSession, settings: AppSettings) throws -> URL? {
     let suggested = suggestedFilename(ext: "pdf", settings: settings)
@@ -75,6 +77,7 @@ public enum DocumentExporter {
     let data = try buildPDFData(session: session, settings: settings)
     try data.write(to: url)
     session.markSaved()
+    settings.saveFolder = url.deletingLastPathComponent()
     return url
   }
 
@@ -107,6 +110,7 @@ public enum DocumentExporter {
 
   /// Presents the image save panel (format picker included), writes the file, marks
   /// `session` saved. DESIGN.md's Image flow is single-page: "One scan -> Save Image…".
+  /// `settings.saveFolder` is updated to wherever the panel actually saved -- see `savePDF`.
   @discardableResult
   public static func saveImage(session: DocumentSession, settings: AppSettings) throws -> URL? {
     guard let entry = imagePageToExport(session: session) else { throw ExportError.emptyDocument }
@@ -119,6 +123,7 @@ public enum DocumentExporter {
     let data = try format.encode(entry.page)
     try data.write(to: url)
     session.markSaved()
+    settings.saveFolder = url.deletingLastPathComponent()
     return url
   }
 }
