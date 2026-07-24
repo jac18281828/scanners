@@ -254,6 +254,15 @@ public enum DocumentCropper {
     return (top + bottom + left + right) / 4
   }
 
+  // MARK: - Rendering
+
+  /// One shared `CIContext` for every crop/rotate render, rather than allocating a fresh one
+  /// per page. A `CIContext` spins up GPU/Metal state on creation, so per-page allocation paid
+  /// that cost on every scan for no reason. `CIContext` is documented thread-safe;
+  /// `nonisolated(unsafe)` states that contract explicitly since the type isn't `Sendable` in
+  /// the SDK — `crop` runs on a detached task, one page at a time.
+  nonisolated(unsafe) static let sharedCIContext = CIContext()
+
   // MARK: - Bounding-box crop
 
   /// Crops to the quad's axis-aligned bounding box — no rotation, no warp. Used when `decide`
@@ -271,7 +280,7 @@ public enum DocumentCropper {
     let cropRect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
       .intersection(imageExtent)
     guard !cropRect.isEmpty else { return nil }
-    return CIContext().createCGImage(CIImage(cgImage: image), from: cropRect)
+    return sharedCIContext.createCGImage(CIImage(cgImage: image), from: cropRect)
   }
 
   // MARK: - Perspective correction
@@ -287,6 +296,6 @@ public enum DocumentCropper {
     filter.setValue(CIVector(cgPoint: corners.bottomLeft), forKey: "inputBottomLeft")
     filter.setValue(CIVector(cgPoint: corners.bottomRight), forKey: "inputBottomRight")
     guard let outputImage = filter.outputImage else { return nil }
-    return CIContext().createCGImage(outputImage, from: outputImage.extent)
+    return sharedCIContext.createCGImage(outputImage, from: outputImage.extent)
   }
 }

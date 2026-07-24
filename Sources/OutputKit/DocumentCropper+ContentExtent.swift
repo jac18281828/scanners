@@ -85,7 +85,7 @@ extension DocumentCropper {
     filter.setValue(turned, forKey: kCIInputImageKey)
     filter.setValue(background, forKey: kCIInputBackgroundImageKey)
     guard let composited = filter.outputImage else { return nil }
-    return CIContext().createCGImage(composited, from: composited.extent)
+    return sharedCIContext.createCGImage(composited, from: composited.extent)
   }
 
   /// The tight axis-aligned box, in `image`'s own full-resolution pixel coordinates, around
