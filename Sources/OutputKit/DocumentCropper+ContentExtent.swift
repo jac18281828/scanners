@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreImage
 import ScannerKit
 
 // MARK: - Content extent (Vision-independent fallback)
@@ -11,31 +12,85 @@ extension DocumentCropper {
   /// own printed content (text, graphics -- anything dark enough to register), which stays
   /// reliably high-contrast against white paper regardless of platen lighting.
   ///
-  /// Deliberately does not attempt rotation. A confident angle from busy or competing page
-  /// content is a much harder problem than finding where the content sits (see `estimateSkew`'s
-  /// sticker-page caveat, and the real-world case that motivated skipping this entirely), and an
-  /// axis-aligned crop is safe even on a genuinely skewed page: decision #9's ±30° addendum
-  /// already treats "leave it crooked, don't guess" as correct for ambiguous skew -- this only
-  /// makes that fallback tighter than the full bed instead of returning it completely untouched.
+  /// Straightens via `estimateSkew` before finding the content box (see `straightened` below) --
+  /// the same projection-profile analysis the confident-Vision path already trusts, gated the
+  /// same way (`SkewEstimate.confident`). An earlier version of this fallback used a bespoke
+  /// border-line estimator (sample the page's physical edge shadow in a thin band near the
+  /// image's top/bottom border, on the theory that a physical-edge signal can't be fooled by a
+  /// crooked sticker the way whole-page content orientation can). That measured well in
+  /// isolation but turned out to be reading a scanner bed-frame artifact, not the page: on this
+  /// hardware the artifact is a 1-2px sliver confined to the image's absolute bottom-left corner
+  /// (verified against a real scan: matched points spanned only the leftmost ~17% of the width,
+  /// in the buffer's literal last two rows), always near 0°, so the estimator confidently
+  /// reported "no rotation" on every scan regardless of the page's true tilt -- the exact
+  /// "thin sliver hugging the border" signature `dropBorderSlivers` already exists to exclude
+  /// elsewhere in this file, which the border-line path never applied. `estimateSkew` doesn't
+  /// have this failure mode (verified against the same real scan: it recovers the page's actual
+  /// ~4° tilt with high confidence) and its sticker-page caveat is exactly the case this
+  /// fallback needs to stay conservative about -- `maximumSecondPeakRatio` rejects a page with a
+  /// competing high-contrast sub-region the same way it already does on the confident-Vision
+  /// path.
   static func contentExtentCrop(_ page: ScannedPage) -> ScannedPage {
-    guard let box = contentExtentBox(page.image) else { return page }
-    let extent = CGRect(x: 0, y: 0, width: page.image.width, height: page.image.height)
+    let workingImage = straightened(page.image) ?? page.image
+    guard let box = contentExtentBox(workingImage) else { return page }
+    let extent = CGRect(x: 0, y: 0, width: workingImage.width, height: workingImage.height)
     let paddingPixels = contentExtentPaddingMM / 25.4 * Double(page.hardwareDPI)
     let padded = box.insetBy(dx: -paddingPixels, dy: -paddingPixels).intersection(extent)
     guard !padded.isEmpty else { return page }
 
-    // No rotation, so the box's own corners are the crop -- reuses `boundingBoxCrop` exactly as
-    // the confident-Vision path does, just fed an axis-aligned box instead of a Vision quad.
+    // The box's own corners are the crop -- reuses `boundingBoxCrop` exactly as the
+    // confident-Vision path does, just fed an axis-aligned box instead of a Vision quad. Any
+    // rotation was already applied by `straightened` above, so this stays axis-aligned.
     let corners = PixelCorners(
       topLeft: CGPoint(x: padded.minX, y: padded.maxY),
       topRight: CGPoint(x: padded.maxX, y: padded.maxY),
       bottomLeft: CGPoint(x: padded.minX, y: padded.minY),
       bottomRight: CGPoint(x: padded.maxX, y: padded.minY))
-    guard let corrected = boundingBoxCrop(page.image, corners: corners, imageExtent: extent)
+    guard let corrected = boundingBoxCrop(workingImage, corners: corners, imageExtent: extent)
     else {
       return page
     }
     return repackaged(page, corrected: corrected) ?? page
+  }
+
+  /// Straightens `image` via `estimateSkew` before extent analysis -- nil (no rotation applied,
+  /// `contentExtentCrop` falls back to the original image) if the profile search isn't confident
+  /// (see `SkewEstimate.confident`), the angle is a no-op, or the rotation transform itself
+  /// degenerates. `contentExtentBox` and the padding/crop then run against the corrected image,
+  /// so the final crop is both tight and upright, not just tight.
+  private static func straightened(_ image: CGImage) -> CGImage? {
+    let skew = estimateSkew(image)
+    guard skew.confident, skew.angleDegrees != 0 else { return nil }
+    return rotated(image, byDegrees: skew.angleDegrees)
+  }
+
+  /// Rotates `image` about its own center by `degrees` (standard CCW-positive convention),
+  /// compositing over white so the corners a rotation exposes read as blank platen rather than
+  /// transparent/undefined pixels -- important because the result feeds straight into
+  /// `contentExtentBox`'s darkness analysis, where an undefined corner pixel could register as
+  /// false content. `degrees` is applied directly, not negated: `estimateSkew`'s angle already
+  /// *is* the correction, verified empirically against a synthetic known-tilt image rather than
+  /// assumed -- its search runs in image-buffer row-down coordinates, the opposite sense from
+  /// Core Image's own y-up space, and the two negations cancel. (`SkewEstimate.angleDegrees`'s
+  /// own doc comment warns its sign is "the search's own projection convention" and until now
+  /// was only ever consumed via `abs()` on the confident-Vision path -- this is the first caller
+  /// to apply it as a real rotation, so the sign needed checking, not assuming.)
+  static func rotated(_ image: CGImage, byDegrees degrees: Double) -> CGImage? {
+    let radians = degrees * .pi / 180
+    let source = CIImage(cgImage: image)
+    let centerX = source.extent.midX
+    let centerY = source.extent.midY
+    let transform =
+      CGAffineTransform(translationX: centerX, y: centerY)
+      .rotated(by: CGFloat(radians))
+      .translatedBy(x: -centerX, y: -centerY)
+    let turned = source.transformed(by: transform)
+    guard let filter = CIFilter(name: "CISourceOverCompositing") else { return nil }
+    let background = CIImage(color: .white).cropped(to: turned.extent)
+    filter.setValue(turned, forKey: kCIInputImageKey)
+    filter.setValue(background, forKey: kCIInputBackgroundImageKey)
+    guard let composited = filter.outputImage else { return nil }
+    return CIContext().createCGImage(composited, from: composited.extent)
   }
 
   /// The tight axis-aligned box, in `image`'s own full-resolution pixel coordinates, around
