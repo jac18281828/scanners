@@ -10,6 +10,10 @@ struct PageStripView: View {
     List(selection: $selectedPageID) {
       ForEach(session.pages) { entry in
         PageThumbnailRow(entry: entry) {
+          // Clear the selection first if it's the row being deleted, same as `onDeleteCommand`
+          // below — otherwise `selectedPageID` dangles and the canvas silently jumps to the
+          // last page instead of showing no selection.
+          if selectedPageID == entry.id { selectedPageID = nil }
           session.removePage(id: entry.id)
         }
         .tag(entry.id)
