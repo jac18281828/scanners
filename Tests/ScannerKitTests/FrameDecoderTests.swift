@@ -127,4 +127,24 @@ struct FrameDecoderTests {
       try FrameDecoder.decode(bytes: [0, 0, 0, 0], params: parameters)
     }
   }
+
+  @Test("a 16-bit ('48-bit color') RGB frame is rejected rather than mis-decoded as 8-bit")
+  func rejects16BitRGB() {
+    // bytesPerLine = width * 3 channels * 2 bytes; feeding this to the 8-bit path would produce
+    // a horizontally-squashed garbage image, so it must escalate instead.
+    let parameters = params(.rgb, Int32(4 * 3 * 2), 4, 2, 16)
+    let bytes = [UInt8](repeating: 0, count: 4 * 3 * 2 * 2)
+    #expect(throws: FrameDecoder.DecodeError.self) {
+      try FrameDecoder.decode(bytes: bytes, params: parameters)
+    }
+  }
+
+  @Test("a 16-bit gray frame is rejected rather than mis-decoded as 8-bit")
+  func rejects16BitGray() {
+    let parameters = params(.gray, Int32(4 * 2), 4, 2, 16)
+    let bytes = [UInt8](repeating: 0, count: 4 * 2 * 2)
+    #expect(throws: FrameDecoder.DecodeError.self) {
+      try FrameDecoder.decode(bytes: bytes, params: parameters)
+    }
+  }
 }

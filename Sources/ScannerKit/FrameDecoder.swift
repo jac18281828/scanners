@@ -14,6 +14,7 @@ enum FrameDecoder {
 
   enum DecodeError: Error, Sendable, Equatable {
     case unsupportedFrameFormat(SaneFrameFormat)
+    case unsupportedDepth(format: SaneFrameFormat, depth: Int)
     case shortFrame(ShortFrameInfo)
     case imageCreationFailed
   }
@@ -31,11 +32,20 @@ enum FrameDecoder {
   static func decode(bytes: [UInt8], params: SaneParametersRecord) throws -> CGImage {
     switch params.format {
     case .rgb:
+      // Only 8-bit-per-channel RGB is decoded; a 16-bit ("48-bit color") frame has twice the
+      // bytesPerLine and would decode as a horizontally-squashed garbage image if fed to the
+      // 8-bit path. Escalate rather than silently corrupt — same stance as the three-pass case.
+      guard params.depth == 8 else {
+        throw DecodeError.unsupportedDepth(format: params.format, depth: Int(params.depth))
+      }
       return try decodeRGB8(bytes: bytes, params: params)
     case .gray:
-      return params.depth == 1
-        ? try decodeLineart1(bytes: bytes, params: params)
-        : try decodeGray8(bytes: bytes, params: params)
+      switch params.depth {
+      case 1: return try decodeLineart1(bytes: bytes, params: params)
+      case 8: return try decodeGray8(bytes: bytes, params: params)
+      default:
+        throw DecodeError.unsupportedDepth(format: params.format, depth: Int(params.depth))
+      }
     case .red, .green, .blue:
       throw DecodeError.unsupportedFrameFormat(params.format)
     }
@@ -154,6 +164,9 @@ extension FrameDecoder.DecodeError: CustomStringConvertible {
     switch self {
     case .unsupportedFrameFormat(let format):
       return "unsupported frame format \(format) (three-pass RGB not implemented — escalate)"
+    case .unsupportedDepth(let format, let depth):
+      return "unsupported bit depth \(depth) for frame format \(format) (only 1-bit or 8-bit "
+        + "gray and 8-bit RGB are decoded — escalate)"
     case .shortFrame(let info):
       return "short frame: expected at least \(info.expected) bytes, got \(info.got)"
     case .imageCreationFailed:
