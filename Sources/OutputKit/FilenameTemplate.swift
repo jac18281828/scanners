@@ -23,8 +23,9 @@ public enum FilenameTemplate {
   }
 
   /// Returns the next non-colliding filename for `date`, e.g. `scan-2026-07-22-001.pdf`.
-  /// `existingFilenames` should be exactly what's in the target directory (any casing,
-  /// full names with extensions) — compared verbatim, so pass the real directory listing.
+  /// `existingFilenames` should be exactly what's in the target directory (full names with
+  /// extensions) — compared case-insensitively to match the default APFS volume, so pass the
+  /// real directory listing.
   ///
   /// `prefix` replaces the leading `scan` (default, unchanged from prior behavior) — Phase
   /// 5's Settings pane exposes this as the "filename template" DESIGN.md's product-behavior
@@ -39,9 +40,15 @@ public enum FilenameTemplate {
     prefix: String = "scan"
   ) throws -> String {
     let dateString = formattedDate(date, calendar: calendar, timeZone: timeZone)
+    let safePrefix = sanitizedPrefix(prefix)
+    // Compare case-insensitively: the default macOS (APFS) volume is case-insensitive, so an
+    // existing `scan-...-001.PDF` collides on disk with a candidate `scan-...-001.pdf` even
+    // though the strings differ. A verbatim `contains` would miss it and hand back a name that
+    // silently overwrites the existing file.
+    let existingLowercased = Set(existingFilenames.map { $0.lowercased() })
     for sequence in 1...maxSequence {
-      let candidate = filename(date: dateString, sequence: sequence, ext: ext, prefix: prefix)
-      if !existingFilenames.contains(candidate) {
+      let candidate = filename(date: dateString, sequence: sequence, ext: ext, prefix: safePrefix)
+      if !existingLowercased.contains(candidate.lowercased()) {
         return candidate
       }
     }
@@ -51,6 +58,20 @@ public enum FilenameTemplate {
   private static func filename(date: String, sequence: Int, ext: String, prefix: String) -> String {
     let paddedSequence = String(format: "%0\(sequenceDigits)d", sequence)
     return "\(prefix)-\(date)-\(paddedSequence).\(ext)"
+  }
+
+  /// Reduces `prefix` to a single safe path component before it's interpolated into a
+  /// filename: strips directory separators (`/`, `\`, `:`) and leading/trailing dots and
+  /// spaces. Without this a user-entered "filename template" like `../../foo` would produce a
+  /// suggested name that escapes the target directory, and a leading `.` would name a hidden
+  /// file. Empty after sanitizing falls back to the default `scan`. This module documents its
+  /// output as one safe path component; enforcing it here keeps that true for a future caller
+  /// that writes the name directly rather than through an `NSSavePanel` the user confirms.
+  private static func sanitizedPrefix(_ prefix: String) -> String {
+    let separators = CharacterSet(charactersIn: "/\\:")
+    let withoutSeparators = prefix.components(separatedBy: separators).joined()
+    let trimmed = withoutSeparators.trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+    return trimmed.isEmpty ? "scan" : trimmed
   }
 
   private static func formattedDate(

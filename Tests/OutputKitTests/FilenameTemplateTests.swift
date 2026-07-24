@@ -77,4 +77,30 @@ struct FilenameTemplateTests {
         date: Self.date(2026, 7, 22), ext: "pdf", existingFilenames: existing)
     }
   }
+
+  @Test("collision check is case-insensitive, matching the default APFS volume")
+  func collisionCheckIsCaseInsensitive() throws {
+    // An existing file whose extension/casing differs would still collide on disk; a verbatim
+    // comparison would miss it and hand back a name that overwrites.
+    let existing: Set<String> = ["SCAN-2026-07-22-001.PDF"]
+    let name = try FilenameTemplate.nextFilename(
+      date: Self.date(2026, 7, 22), ext: "pdf", existingFilenames: existing)
+    #expect(name == "scan-2026-07-22-002.pdf")
+  }
+
+  @Test("a path-traversal prefix is reduced to a single safe component")
+  func prefixTraversalIsSanitized() throws {
+    let name = try FilenameTemplate.nextFilename(
+      date: Self.date(2026, 7, 22), ext: "pdf", existingFilenames: [], prefix: "../../etc/foo")
+    #expect(!name.contains("/"))
+    #expect(!name.contains(".."))
+    #expect(name.hasSuffix("-2026-07-22-001.pdf"))
+  }
+
+  @Test("a prefix that sanitizes to empty falls back to the default 'scan'")
+  func emptyPrefixFallsBackToScan() throws {
+    let name = try FilenameTemplate.nextFilename(
+      date: Self.date(2026, 7, 22), ext: "pdf", existingFilenames: [], prefix: "///")
+    #expect(name == "scan-2026-07-22-001.pdf")
+  }
 }
