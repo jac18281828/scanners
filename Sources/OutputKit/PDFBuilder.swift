@@ -205,8 +205,16 @@ public final class PDFBuilder {
       // y-flip needed here (see OCRTextLine's doc comment). Translation goes through
       // textPosition, not textMatrix's own tx/ty — CoreText positions glyphs from
       // textPosition and only uses textMatrix for scale/rotation/skew.
+      //
+      // Raise the baseline off the box floor by the font's descent: `CTLineDraw` positions
+      // glyphs from the *baseline*, but Vision's box bottom sits at the descender bottom, not
+      // the baseline. Putting the baseline at the box floor lets descenders (and the search
+      // highlight PDF viewers derive from the glyph run) hang a descent below the real ink —
+      // the "highlight sits low" symptom. Offsetting by `CTFontGetDescent` seats the em box in
+      // Vision's box so the invisible glyphs track the visible text.
+      let descent = CTFontGetDescent(font)
       context.textMatrix = CGAffineTransform(scaleX: horizontalScale, y: 1)
-      context.textPosition = boxOriginPt
+      context.textPosition = CGPoint(x: boxOriginPt.x, y: boxOriginPt.y + descent)
       CTLineDraw(ctLine, context)
       context.restoreGState()
     }
