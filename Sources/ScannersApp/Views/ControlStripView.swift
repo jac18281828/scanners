@@ -1,3 +1,4 @@
+import ScannerKit
 import SwiftUI
 
 /// Mode toggle, inline dpi/color pickers (option sets swap per mode), preset chips, and the
@@ -42,7 +43,7 @@ struct ControlStripView: View {
           "Color", selection: Binding(get: { session.colorMode }, set: { session.colorMode = $0 })
         ) {
           ForEach(DocumentMode.colorOptions, id: \.self) { mode in
-            Text(mode == .color ? "Color" : "Black & White").tag(mode)
+            Text(Self.colorModeLabel(mode)).tag(mode)
           }
         }
         .frame(width: 170)
@@ -77,6 +78,14 @@ struct ControlStripView: View {
         .controlSize(.small)
         .foregroundStyle(.secondary)
       }
+    }
+  }
+
+  private static func colorModeLabel(_ mode: ScanMode) -> String {
+    switch mode {
+    case .color: return "Color"
+    case .gray: return "Greyscale"
+    case .blackAndWhite: return "Black & White"
     }
   }
 }

@@ -32,10 +32,14 @@ public enum DocumentMode: String, CaseIterable, Codable, Sendable, Equatable, Id
     }
   }
 
-  /// DESIGN.md names only two color states in the product-behavior section ("default 300
-  /// B&W; also color" / "default 600 Color; also B&W") — `ScanMode.gray` is never mentioned
-  /// there and isn't exposed by the control strip's color picker (see the phase report's
-  /// deviations for this UI-detail decision).
+  /// DESIGN.md's product-behavior section only names two *default* color states ("default
+  /// 300 B&W; also color" / "default 600 Color; also B&W") — `.gray` was originally left off
+  /// the control strip's color picker entirely as a UI-detail deviation. It's a real hardware
+  /// mode the scanner reports (DESIGN.md's "Validated hardware facts": `Color`, `Color (48
+  /// bits)`, `Gray`, `Lineart`) and a real escape hatch from Lineart's hardware bilevel
+  /// threshold (see `DocumentCropper+ContentExtent.swift`'s and `ImageExporter`'s doc
+  /// comments on why Lineart can lose saturated color content it shouldn't), so it's exposed
+  /// as a manual third choice -- neither mode defaults to it.
   public var defaultColorMode: ScanMode {
     switch self {
     case .text: return .blackAndWhite
@@ -43,6 +47,6 @@ public enum DocumentMode: String, CaseIterable, Codable, Sendable, Equatable, Id
     }
   }
 
-  /// The color picker's two-way option set for this mode.
-  public static let colorOptions: [ScanMode] = [.color, .blackAndWhite]
+  /// The color picker's option set for this mode.
+  public static let colorOptions: [ScanMode] = [.color, .gray, .blackAndWhite]
 }

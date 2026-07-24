@@ -178,8 +178,14 @@ Scanners.app
 
 ## Product behavior
 
-- **Two modes.** Text: default 300dpi B&W; also color; dpi 75/150/300/600.
-  Image: default 600dpi color; also B&W; dpi 300/600/1200/2400.
+- **Two modes.** Text: default 300dpi B&W; also color or greyscale; dpi 75/150/300/600.
+  Image: default 600dpi color; also B&W or greyscale; dpi 300/600/1200/2400. Greyscale
+  (`Gray`) was originally left off the color picker as a UI-detail deviation; it's a real
+  scanner-reported mode and the escape hatch from Lineart's hardware bilevel threshold
+  losing saturated color content (dark/saturated colors read as low-luminance and can vanish
+  entirely against a dark background — see `ImageExporter`'s and
+  `DocumentCropper+ContentExtent.swift`'s doc comments), so it's exposed as a manual third
+  choice. Neither mode defaults to it.
 - **PDF flow (multipage).** Scan → page appears in thumbnail strip → "Scan Next Page" loop
   → "Save PDF…". Text-mode PDFs get the OCR layer.
 - **Image flow (single).** One scan → "Save Image…" — JPEG default; PNG, TIFF, HEIC options.
