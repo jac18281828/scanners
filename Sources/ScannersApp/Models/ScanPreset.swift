@@ -84,7 +84,7 @@ extension ScanPreset {
 
   /// DESIGN.md: "image/2400/color/TIFF".
   public static let archive = ScanPreset(
-    id: archiveID, name: "Archive", documentMode: .image, dpi: 2400, colorMode: .color,
+    id: archiveID, name: "Archive", documentMode: .image, dpi: 1200, colorMode: .color,
     imageFormat: .tiff)
 
   public static let builtIns: [ScanPreset] = [.textDoc, .photo, .archive]
