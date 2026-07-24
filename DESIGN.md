@@ -191,7 +191,7 @@ Scanners.app
 - **Image flow (single).** One scan → "Save Image…" — JPEG default; PNG, TIFF, HEIC options.
 - **New Document (⌘N)** resets the session; many documents per app session.
 - **Settings: presets, not forms.** Preset chips in the main window (Text Doc, Photo,
-  Archive 2400, + user-defined). One click = mode+dpi+color+format applied. Settings pane
+  Archive 1200, + user-defined). One click = mode+dpi+color+format applied. Settings pane
   (⌘,) manages presets, default save folder, filename template (`scan-2026-07-22-001`),
   source (Flatbed/ADF), lamp timeout, OCR language (default English). Last-used settings
   persist. No modal ceremony:

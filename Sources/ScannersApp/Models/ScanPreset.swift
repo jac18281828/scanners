@@ -82,7 +82,8 @@ extension ScanPreset {
     id: photoID, name: "Photo", documentMode: .image, dpi: 600, colorMode: .color,
     imageFormat: .jpeg)
 
-  /// DESIGN.md: "image/2400/color/TIFF".
+  /// Archive: image/1200/color/TIFF. (1200, not the 2400 DESIGN.md originally listed — 2400
+  /// is a slow, rarely-warranted full-bed scan; 1200 is the more reasonable archival default.)
   public static let archive = ScanPreset(
     id: archiveID, name: "Archive", documentMode: .image, dpi: 1200, colorMode: .color,
     imageFormat: .tiff)
