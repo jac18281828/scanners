@@ -31,6 +31,7 @@ struct ControlStripView: View {
         .pickerStyle(.segmented)
         .frame(width: 160)
         .labelsHidden()
+        .disabled(controller.isScanning)
 
         Picker("DPI", selection: Binding(get: { session.dpi }, set: { session.dpi = $0 })) {
           ForEach(session.documentMode.dpiOptions, id: \.self) { dpi in
@@ -38,6 +39,7 @@ struct ControlStripView: View {
           }
         }
         .frame(width: 140)
+        .disabled(controller.isScanning)
 
         Picker(
           "Color", selection: Binding(get: { session.colorMode }, set: { session.colorMode = $0 })
@@ -47,6 +49,7 @@ struct ControlStripView: View {
           }
         }
         .frame(width: 170)
+        .disabled(controller.isScanning)
 
         Spacer()
 
@@ -68,6 +71,7 @@ struct ControlStripView: View {
           }
           .buttonStyle(.bordered)
           .controlSize(.small)
+          .disabled(controller.isScanning)
         }
         Button {
           onSavePreset()

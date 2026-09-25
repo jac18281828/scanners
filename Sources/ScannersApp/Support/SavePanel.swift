@@ -1,9 +1,11 @@
 import AppKit
 import Foundation
 
-/// Thin `NSSavePanel` wrappers for the two save flows. Kept dumb and untested (no display in
-/// CI) on purpose — `DocumentExporter` holds every piece of save-flow logic worth testing
-/// (PDF assembly, filename suggestion) independent of these panels ever appearing.
+/// Thin `NSSavePanel` wrappers for the two save flows. The panels themselves stay dumb and
+/// untested (no display in CI) — `DocumentExporter` holds every piece of save-flow logic
+/// worth testing independent of a panel ever appearing. The one exception is `ImageSaveName`
+/// below, the image panel's format-change naming rule, pulled out as a pure function so it
+/// has its own tests without AppKit.
 @MainActor
 enum SavePanel {
   static func presentPDFPanel(suggestedName: String, directory: URL) -> URL? {
@@ -22,8 +24,7 @@ enum SavePanel {
     suggestedBaseName: String, directory: URL, defaultFormat: ImageFormat
   ) -> (url: URL, format: ImageFormat)? {
     let panel = NSSavePanel()
-    let accessory = ImageFormatAccessory(
-      panel: panel, baseName: suggestedBaseName, initial: defaultFormat)
+    let accessory = ImageFormatAccessory(panel: panel, initial: defaultFormat)
     panel.title = "Save Image"
     panel.accessoryView = accessory.view
     panel.allowedContentTypes = [defaultFormat.utType]
@@ -42,13 +43,11 @@ enum SavePanel {
 @MainActor
 private final class ImageFormatAccessory: NSObject {
   private weak var panel: NSSavePanel?
-  private let baseName: String
   private(set) var selectedFormat: ImageFormat
   let view: NSView
 
-  init(panel: NSSavePanel, baseName: String, initial: ImageFormat) {
+  init(panel: NSSavePanel, initial: ImageFormat) {
     self.panel = panel
-    self.baseName = baseName
     self.selectedFormat = initial
 
     let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 140, height: 24), pullsDown: false)
@@ -69,10 +68,28 @@ private final class ImageFormatAccessory: NSObject {
 
   @objc private func formatChanged(_ sender: NSPopUpButton) {
     guard let title = sender.titleOfSelectedItem,
-      let format = ImageFormat.allCases.first(where: { $0.displayName == title })
+      let format = ImageFormat.allCases.first(where: { $0.displayName == title }),
+      let panel
     else { return }
     selectedFormat = format
-    panel?.allowedContentTypes = [format.utType]
-    panel?.nameFieldStringValue = "\(baseName).\(format.fileExtension)"
+    panel.allowedContentTypes = [format.utType]
+    panel.nameFieldStringValue = ImageSaveName.applyingExtension(
+      format.fileExtension, toTypedName: panel.nameFieldStringValue)
+  }
+}
+
+/// Pure name-swap rule behind `ImageFormatAccessory.formatChanged`, split out so a test can
+/// reach it without AppKit. Keeps whatever the user typed: replaces a name already ending in
+/// a known image extension, otherwise appends the new one.
+enum ImageSaveName {
+  private static let knownExtensions: Set<String> = ["jpg", "jpeg", "png", "tif", "tiff", "heic"]
+
+  static func applyingExtension(_ newExtension: String, toTypedName typedName: String) -> String {
+    if let dot = typedName.lastIndex(of: "."),
+      knownExtensions.contains(typedName[typedName.index(after: dot)...].lowercased())
+    {
+      return "\(typedName[..<dot]).\(newExtension)"
+    }
+    return typedName + "." + newExtension
   }
 }

@@ -1,4 +1,5 @@
 import CoreGraphics
+import Dispatch
 import Foundation
 import OutputKit
 import ScannerKit
@@ -14,6 +15,31 @@ private actor OCRCallRecorder {
 
   func record(imageWidth: Int, language: String) {
     calls.append((imageWidth, language))
+  }
+}
+
+/// Lets a test observe when `ScanController`'s detached crop task actually starts, and hold
+/// it there until the test releases it -- the window `cancelDuringCropDropsPage` needs to
+/// land `cancelScan()` while the crop is still running. Plain semaphores, not
+/// `Task.isCancelled`: the crop task is detached and never sees the scan's cancellation. Both
+/// waits are timeout-bounded so a broken fix (the crop never actually running, or never being
+/// released) fails the test instead of hanging it.
+private final class CropGate: @unchecked Sendable {
+  private let started = DispatchSemaphore(value: 0)
+  private let release = DispatchSemaphore(value: 0)
+
+  func crop(_ page: ScannedPage) -> ScannedPage {
+    started.signal()
+    _ = release.wait(timeout: .now() + .seconds(5))
+    return page
+  }
+
+  func waitUntilStarted() -> DispatchTimeoutResult {
+    started.wait(timeout: .now() + .seconds(5))
+  }
+
+  func open() {
+    release.signal()
   }
 }
 
@@ -153,6 +179,35 @@ struct ScanControllerTests {
     await waitUntilIdle(controller)
 
     #expect(controller.scanState == .idle)
+    #expect(session.pages.isEmpty)
+  }
+
+  @Test("cancelScan() landing mid-crop drops the page and never starts OCR")
+  func cancelDuringCropDropsPage() async throws {
+    let session = DocumentSession(documentMode: .text)
+    session.dpi = 100
+    let settings = AppSettings(defaults: TestFixtures.isolatedDefaults())
+    let recorder = OCRCallRecorder()
+    let gate = CropGate()
+    let controller = ScanController(
+      backendMode: .mock, ocrRunner: stubOCRRunner(recorder: recorder),
+      documentCropper: { gate.crop($0) })
+
+    controller.scan(into: session, settings: settings)
+    // Off the MainActor: the scan loop needs it free to reach `.completed` and start the crop.
+    let started = await Task.detached { gate.waitUntilStarted() }.value
+    try #require(started == .success)
+    controller.cancelScan()
+    gate.open()
+    await waitUntilIdle(controller)
+    // Background OCR would be a separate detached task from the scan loop -- give a stray
+    // one a chance to appear before asserting none did, as imageModeScanSkipsOCR does.
+    try? await Task.sleep(for: .milliseconds(50))
+
+    #expect(controller.scanState == .idle)
+    #expect(session.pages.isEmpty)
+    let calls = await recorder.calls
+    #expect(calls.isEmpty)
   }
 
   @Test("banner mapping: deviceNotFound is retryable")

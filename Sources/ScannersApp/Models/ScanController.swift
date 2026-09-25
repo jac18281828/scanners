@@ -170,6 +170,9 @@ public final class ScanController {
           let croppedPage = await Task.detached(priority: .userInitiated) {
             cropper(page)
           }.value
+          // The detached crop task ignores this scan's cancellation, so a cancel landing
+          // mid-crop must be caught here, before the page reaches the session.
+          try Task.checkCancellation()
           let entry = session.addPage(croppedPage)
           if entry.ocrStatus == .pending {
             beginBackgroundOCR(

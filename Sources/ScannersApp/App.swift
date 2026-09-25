@@ -32,11 +32,12 @@ struct ScannersAppRoot: App {
       CommandGroup(replacing: .newItem) {
         Button("New Document") { newDocument() }
           .keyboardShortcut("n", modifiers: .command)
+          .disabled(controller.isScanning)
       }
       CommandGroup(replacing: .saveItem) {
         Button(session.documentMode == .text ? "Save PDF…" : "Save Image…") { saveCurrent() }
           .keyboardShortcut("s", modifiers: .command)
-          .disabled(session.pages.isEmpty)
+          .disabled(session.pages.isEmpty || controller.isScanning)
       }
       CommandMenu("Scan") {
         Button("Scan") { controller.scan(into: session, settings: settings) }
