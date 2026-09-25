@@ -51,8 +51,20 @@ jobs:
       - name: Test
         run: swift test
 
+      # Pinned so a new SwiftLint release cannot add rules and turn main red unannounced;
+      # bump the version and digest together, deliberately.
       - name: Install SwiftLint
-        run: brew install swiftlint
+        env:
+          SWIFTLINT_VERSION: 0.65.0
+          SWIFTLINT_SHA256: d6cb0aa7a2f5f1ef306fc9e37bcb54dc9a26facc8f7784ac0c3dd3eccf5c6ba6
+        run: |
+          set -euo pipefail
+          zip="$RUNNER_TEMP/swiftlint.zip"
+          curl -fsSL -o "$zip" \
+            "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/portable_swiftlint.zip"
+          echo "${SWIFTLINT_SHA256}  $zip" | shasum -a 256 -c -
+          unzip -q "$zip" -d "$RUNNER_TEMP/swiftlint"
+          echo "$RUNNER_TEMP/swiftlint" >> "$GITHUB_PATH"
 
       - name: SwiftLint
         run: swiftlint lint --strict

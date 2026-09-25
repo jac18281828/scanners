@@ -47,7 +47,7 @@ private struct PageThumbnailRow: View {
     HStack {
       Image(decorative: entry.page.image, scale: 1, orientation: .up)
         .resizable()
-        .aspectRatio(contentMode: .fit)
+        .scaledToFit()
         .frame(width: 60, height: 78)
         .background(.white)
         .overlay(RoundedRectangle(cornerRadius: 3).stroke(.separator))

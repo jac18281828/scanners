@@ -24,7 +24,7 @@ struct CanvasView: View {
             // pixel data) so the on-screen preview reads as smooth, not pixelated.
             .interpolation(.high)
             .antialiased(true)
-            .aspectRatio(contentMode: .fit)
+            .scaledToFit()
             .background(Color.white)
             .shadow(radius: 6, y: 2)
             .padding(24)
