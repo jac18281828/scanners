@@ -87,6 +87,28 @@ struct FrameDecoderTests {
     }
   }
 
+  @Test("a bytesPerLine too short for pixelsPerLine throws before reading any pixel")
+  func shortRowThrowsBeforeDecoding() {
+    // width = 10 needs bytesPerLine >= ceil(10/8) = 2; 1 is too short. Two bytes of backing
+    // data keeps every row-stride-1 pixel access in bounds even without the guard, so a
+    // reverted guard surfaces as a wrongly-decoded image (a failed expectation below)
+    // rather than an out-of-bounds crash.
+    let parameters = params(.gray, 1, 10, 1, 1)
+    do {
+      _ = try FrameDecoder.decodeLineart1(bytes: [0xFF, 0xFF], params: parameters)
+      Issue.record("expected DecodeError.shortRow")
+    } catch let error as FrameDecoder.DecodeError {
+      guard case .shortRow(let info) = error else {
+        Issue.record("expected .shortRow, got \(error)")
+        return
+      }
+      #expect(info.bytesPerLine == 1)
+      #expect(info.pixelsPerLine == 10)
+    } catch {
+      Issue.record("expected FrameDecoder.DecodeError, got \(error)")
+    }
+  }
+
   @Test("8-bit RGB frame decodes to the right dimensions and format")
   func decodesRGB8() throws {
     let width = 4
@@ -146,5 +168,14 @@ struct FrameDecoderTests {
     #expect(throws: FrameDecoder.DecodeError.self) {
       try FrameDecoder.decode(bytes: bytes, params: parameters)
     }
+  }
+
+  @Test("unsupportedFrameFormat and unsupportedDepth descriptions carry no escalate wording")
+  func decodeErrorDescriptionsHaveNoEscalateWording() {
+    let formatError = FrameDecoder.DecodeError.unsupportedFrameFormat(.red)
+    let depthError = FrameDecoder.DecodeError.unsupportedDepth(format: .rgb, depth: 16)
+
+    #expect(!formatError.description.contains("escalate"))
+    #expect(!depthError.description.contains("escalate"))
   }
 }

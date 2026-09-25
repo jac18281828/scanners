@@ -12,10 +12,16 @@ enum FrameDecoder {
     let got: Int
   }
 
+  struct ShortRowInfo: Sendable, Equatable {
+    let bytesPerLine: Int
+    let pixelsPerLine: Int
+  }
+
   enum DecodeError: Error, Sendable, Equatable {
     case unsupportedFrameFormat(SaneFrameFormat)
     case unsupportedDepth(format: SaneFrameFormat, depth: Int)
     case shortFrame(ShortFrameInfo)
+    case shortRow(ShortRowInfo)
     case imageCreationFailed
   }
 
@@ -99,6 +105,11 @@ enum FrameDecoder {
     let width = Int(params.pixelsPerLine)
     let height = Int(params.lines)
     let srcBytesPerRow = Int(params.bytesPerLine)
+    let minBytesPerRow = (width + 7) / 8
+    guard srcBytesPerRow >= minBytesPerRow else {
+      throw DecodeError.shortRow(
+        ShortRowInfo(bytesPerLine: srcBytesPerRow, pixelsPerLine: width))
+    }
     try requireLength(bytes, srcBytesPerRow * height)
 
     var gray = [UInt8](repeating: 0, count: width * height)
@@ -163,12 +174,15 @@ extension FrameDecoder.DecodeError: CustomStringConvertible {
   var description: String {
     switch self {
     case .unsupportedFrameFormat(let format):
-      return "unsupported frame format \(format) (three-pass RGB not implemented — escalate)"
+      return "unsupported frame format \(format) (three-pass RGB not implemented)"
     case .unsupportedDepth(let format, let depth):
       return "unsupported bit depth \(depth) for frame format \(format) (only 1-bit or 8-bit "
-        + "gray and 8-bit RGB are decoded — escalate)"
+        + "gray and 8-bit RGB are decoded)"
     case .shortFrame(let info):
       return "short frame: expected at least \(info.expected) bytes, got \(info.got)"
+    case .shortRow(let info):
+      return
+        "short row: bytesPerLine \(info.bytesPerLine) too small for \(info.pixelsPerLine) pixels"
     case .imageCreationFailed:
       return "CGImage creation failed"
     }

@@ -20,6 +20,18 @@ final class MockSane: SaneBackend, @unchecked Sendable {
     var bedHeightMM: Double
     /// If set, `open` fails with this status instead of succeeding.
     var openFailure: SaneRawStatus?
+    /// If set, `listDevices` (and so `sane_get_devices`-backed discovery) fails with this
+    /// status instead of succeeding. `nil` by default.
+    var listDevicesFailure: SaneRawStatus?
+    /// If set, `start` fails with this status instead of succeeding. `nil` by default.
+    var startFailure: SaneRawStatus?
+    /// `setOption` fails with `SANE_STATUS_INVAL` for any option index in this set, instead
+    /// of applying the value. Empty by default.
+    var failSetOptionIndices: Set<Int32> = []
+    /// `SaneParametersRecord.lastFrame` every mode reports — lets a test simulate a
+    /// multi-frame device (`ScanSession.runScan`'s unsupported-frame guard). `true` by
+    /// default, matching every mode's natural single-frame shape.
+    var lastFrameOverride = true
     /// Per-`sane_read` artificial delay, for cancellation tests that need a wide-enough
     /// window to reliably cancel mid-scan. Zero for every other test, so the suite stays
     /// fast.
@@ -29,6 +41,14 @@ final class MockSane: SaneBackend, @unchecked Sendable {
     /// tests don't care about it, matching the "device without this option" case
     /// `ScanSession.negotiateOptions` must tolerate.
     var includesLampTimeoutOption: Bool = false
+    /// When set, mirrors hp5590 raising `br-y`'s max to this height and reporting
+    /// SANE_INFO_RELOAD_OPTIONS once `source` becomes ADF. `nil` keeps a single fixed bed
+    /// height.
+    var adfBedHeightMM: Double?
+    /// Test-only hook invoked synchronously, on the runner's queue, each time
+    /// `optionDescriptors` is called — lets a test cancel the driving `Task` at a
+    /// deterministic point during negotiation instead of racing a sleep. `nil` by default.
+    var onOptionDescriptors: (@Sendable () -> Void)?
 
     static let `default` = Configuration(
       devices: [
@@ -70,6 +90,13 @@ final class MockSane: SaneBackend, @unchecked Sendable {
   var devicesOverride: [SaneDeviceRecord]?
 
   var cancelCallCount = 0
+  var startCallCount = 0
+  /// How many times `read` has returned `reachedEOF == true`. Lets a test distinguish
+  /// "cancelled before EOF" from "ran to completion" without relying on `cancelCallCount`
+  /// alone. Read under `lock`, same as every other mutable field here.
+  var readEOFCount = 0
+  /// Ordered record of `cancel`/`close` calls, for asserting exact teardown order and count.
+  var teardownLog: [String] = []
 
   init(configuration: Configuration = .default) {
     self.configuration = configuration
@@ -98,6 +125,10 @@ final class MockSane: SaneBackend, @unchecked Sendable {
 
 extension MockSane {
   func listDevices() throws -> [SaneDeviceRecord] {
+    if let failure = configuration.listDevicesFailure {
+      throw SaneCallFailure(
+        status: failure, context: "sane_get_devices", message: "mocked failure")
+    }
     lock.lock()
     defer { lock.unlock() }
     return devicesOverride ?? configuration.devices
@@ -127,5 +158,36 @@ extension MockSane {
     openHandles.remove(handle.raw)
     readCursor.removeValue(forKey: handle.raw)
     frameCache.removeValue(forKey: handle.raw)
+    teardownLog.append("close")
+  }
+}
+
+// MARK: - Locked test accessors
+
+extension MockSane {
+  /// Plain (non-`async`) functions, so tests can call them from an `async` body without
+  /// tripping `NSLock`'s `NS_SWIFT_UNAVAILABLE_FROM_ASYNC`.
+  func cancelCallCountForTesting() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return cancelCallCount
+  }
+
+  func startCallCountForTesting() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return startCallCount
+  }
+
+  func teardownLogForTesting() -> [String] {
+    lock.lock()
+    defer { lock.unlock() }
+    return teardownLog
+  }
+
+  func readEOFCountForTesting() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return readEOFCount
   }
 }

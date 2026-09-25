@@ -36,6 +36,47 @@ struct ErrorMappingTests {
     }
   }
 
+  @Test("INVAL from setOption (not open) maps to ioError, not deviceNotFound")
+  func setOptionInvalidMapsToIOError() async throws {
+    var configuration = MockSane.Configuration.default
+    configuration.failSetOptionIndices = [MockSane.OptionIndex.mode.rawValue]
+    let mock = MockSane(configuration: configuration)
+    let session = ScanSession(
+      deviceID: configuration.devices[0].name, backend: mock, runner: SaneRunner())
+    let config = ScanConfiguration(mode: .gray, requestedDPI: 100)
+
+    do {
+      for try await _ in session.scan(config: config) {}
+      Issue.record("expected scan(config:) to throw")
+    } catch let error as ScanError {
+      guard case .ioError(let message) = error else {
+        Issue.record("expected .ioError, got \(error)")
+        return
+      }
+      #expect(message.contains("setOption"))
+    }
+  }
+
+  @Test("INVAL from start (not open) maps to ioError, not deviceNotFound")
+  func startInvalidMapsToIOError() async throws {
+    var configuration = MockSane.Configuration.default
+    configuration.startFailure = .invalid
+    let mock = MockSane(configuration: configuration)
+    let session = ScanSession(
+      deviceID: configuration.devices[0].name, backend: mock, runner: SaneRunner())
+    let config = ScanConfiguration(mode: .gray, requestedDPI: 100)
+
+    do {
+      for try await _ in session.scan(config: config) {}
+      Issue.record("expected scan(config:) to throw")
+    } catch let error as ScanError {
+      guard case .ioError = error else {
+        Issue.record("expected .ioError, got \(error)")
+        return
+      }
+    }
+  }
+
   @Test("ScanError descriptions are human-readable")
   func descriptionsAreReadable() {
     #expect(ScanError.deviceNotFound("x").description.contains("x"))

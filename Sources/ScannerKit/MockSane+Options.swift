@@ -4,8 +4,12 @@ import Foundation
 
 extension MockSane {
   func optionDescriptors(_ handle: SaneHandle) throws -> [SaneOptionDescriptorRecord] {
+    configuration.onOptionDescriptors?()
+    lock.lock()
+    let sourceIsADF = optionValues[OptionIndex.source.rawValue] == .string("ADF")
+    lock.unlock()
     let bedW = configuration.bedWidthMM
-    let bedH = configuration.bedHeightMM
+    let bedH = (sourceIsADF ? configuration.adfBedHeightMM : nil) ?? configuration.bedHeightMM
     var descriptors = [
       stringOption(.mode, name: "mode", title: "Scan mode", values: ["Gray", "Color", "Lineart"]),
       stringOption(.source, name: "source", title: "Scan source", values: ["Flatbed", "ADF"]),
@@ -114,6 +118,11 @@ extension MockSane {
     lock.lock()
     defer { lock.unlock() }
 
+    if configuration.failSetOptionIndices.contains(index) {
+      throw SaneCallFailure(
+        status: .invalid, context: "setOption(\(index))", message: "mocked failure")
+    }
+
     guard let option = OptionIndex(rawValue: index) else {
       throw SaneCallFailure(
         status: .invalid, context: "setOption(\(index))", message: "no such option")
@@ -122,8 +131,10 @@ extension MockSane {
     switch option {
     case .resolution:
       return try setResolution(index: index, value: value)
-    case .mode, .source:
+    case .mode:
       return try setStringOption(index: index, value: value)
+    case .source:
+      return try setSourceOption(index: index, value: value)
     case .topLeftX, .topLeftY, .bottomRightX, .bottomRightY:
       return try setFixedOption(index: index, value: value)
     case .lampTimeout:
@@ -165,6 +176,21 @@ extension MockSane {
     }
     optionValues[index] = value
     return .exact
+  }
+
+  /// Setting `source` to ADF, when the mock is configured with an ADF bed height, mirrors
+  /// hp5590 reporting SANE_INFO_RELOAD_OPTIONS so callers refetch the now-larger `br-y`.
+  private func setSourceOption(index: Int32, value: SaneOptionValue) throws -> SaneSetOptionResult {
+    guard case .string(let sourceName) = value else {
+      throw SaneCallFailure(
+        status: .invalid, context: "setOption(\(index))", message: "expected string")
+    }
+    optionValues[index] = value
+    guard configuration.adfBedHeightMM != nil else {
+      return .exact
+    }
+    return SaneSetOptionResult(
+      inexact: false, reloadOptions: sourceName == "ADF", reloadParams: false)
   }
 
   private func setFixedOption(index: Int32, value: SaneOptionValue) throws -> SaneSetOptionResult {

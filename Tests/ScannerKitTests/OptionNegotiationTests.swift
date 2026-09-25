@@ -132,6 +132,28 @@ struct OptionNegotiationTests {
     #expect(value == .bool(true))
   }
 
+  @Test("ADF scan with no explicit area sets br-y to the ADF maximum, not the flatbed's")
+  func adfScanUsesADFHeightAfterReload() async throws {
+    var configuration = MockSane.Configuration.default
+    configuration.adfBedHeightMM = 355.6
+    let mock = MockSane(configuration: configuration)
+    let session = makeSession(mock: mock)
+    let config = ScanConfiguration(mode: .gray, requestedDPI: 100, source: .adf, area: nil)
+
+    var sawStarted: ScanParametersInfo?
+    for try await event in session.scan(config: config) {
+      if case .started(let info) = event {
+        sawStarted = info
+      }
+    }
+
+    let info = try #require(sawStarted)
+    let expectedADFHeightPixels = Int((configuration.adfBedHeightMM! / 25.4 * 100).rounded())
+    let expectedFlatbedHeightPixels = Int((configuration.bedHeightMM / 25.4 * 100).rounded())
+    #expect(info.heightPixels == expectedADFHeightPixels)
+    #expect(info.heightPixels != expectedFlatbedHeightPixels)
+  }
+
   @Test(
     "lamp timeout negotiation is silently skipped, not an error, when the device has no such option"
   )

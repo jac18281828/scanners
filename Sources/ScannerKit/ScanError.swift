@@ -43,8 +43,6 @@ enum ErrorMapper {
     }
     if let failure = error as? SaneCallFailure {
       switch failure.status {
-      case .invalid:
-        return .deviceNotFound(deviceID)
       case .deviceBusy:
         return .deviceBusy(deviceID)
       case .cancelled:
@@ -54,5 +52,16 @@ enum ErrorMapper {
       }
     }
     return .ioError(String(describing: error))
+  }
+
+  /// `sane_open` failing with SANE_STATUS_INVAL means no such device — most often a stale
+  /// id from before a replug. INVAL from every other call is a genuine invalid-argument
+  /// failure, mapped to `.ioError` by `map` above; only the open call site itself, not the
+  /// failure's `context` string, decides which rule applies.
+  static func mapOpenFailure(_ error: Error, deviceID: String) -> ScanError {
+    if let failure = error as? SaneCallFailure, failure.status == .invalid {
+      return .deviceNotFound(deviceID)
+    }
+    return map(error, deviceID: deviceID)
   }
 }

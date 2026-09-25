@@ -8,19 +8,21 @@ extension MockSane {
     let (width, height) = currentDimensionsLocked()
     let mode = currentModeLocked()
     lock.unlock()
-    return Self.parametersRecord(mode: mode, width: width, height: height)
+    return Self.parametersRecord(
+      mode: mode, width: width, height: height, lastFrame: configuration.lastFrameOverride)
   }
 
   private static func parametersRecord(
     mode: String,
     width: Int,
-    height: Int
+    height: Int,
+    lastFrame: Bool
   ) -> SaneParametersRecord {
     switch mode {
     case "Color":
       return SaneParametersRecord(
         format: .rgb,
-        lastFrame: true,
+        lastFrame: lastFrame,
         bytesPerLine: Int32(width * 3),
         pixelsPerLine: Int32(width),
         lines: Int32(height),
@@ -30,7 +32,7 @@ extension MockSane {
       let bytesPerLine = Int32((width + 7) / 8)
       return SaneParametersRecord(
         format: .gray,
-        lastFrame: true,
+        lastFrame: lastFrame,
         bytesPerLine: bytesPerLine,
         pixelsPerLine: Int32(width),
         lines: Int32(height),
@@ -39,7 +41,7 @@ extension MockSane {
     default:
       return SaneParametersRecord(
         format: .gray,
-        lastFrame: true,
+        lastFrame: lastFrame,
         bytesPerLine: Int32(width),
         pixelsPerLine: Int32(width),
         lines: Int32(height),
@@ -49,9 +51,13 @@ extension MockSane {
   }
 
   func start(_ handle: SaneHandle) throws {
+    if let failure = configuration.startFailure {
+      throw SaneCallFailure(status: failure, context: "sane_start", message: "mocked failure")
+    }
     let params = try parameters(handle)
     lock.lock()
     defer { lock.unlock() }
+    startCallCount += 1
     frameCache[handle.raw] = Self.syntheticFrame(params: params)
     readCursor[handle.raw] = 0
   }
@@ -66,6 +72,7 @@ extension MockSane {
       throw SaneCallFailure(status: .invalid, context: "read", message: "sane_start not called")
     }
     if cursor >= frame.count {
+      readEOFCount += 1
       return SaneReadResult(bytes: [], reachedEOF: true)
     }
     let end = min(cursor + Int(maxLength), frame.count)
@@ -80,6 +87,7 @@ extension MockSane {
     cancelCallCount += 1
     frameCache.removeValue(forKey: handle.raw)
     readCursor.removeValue(forKey: handle.raw)
+    teardownLog.append("cancel")
   }
 }
 

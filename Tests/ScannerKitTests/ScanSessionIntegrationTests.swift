@@ -66,4 +66,22 @@ struct ScanSessionIntegrationTests {
 
     #expect(lastProgress == 1.0)
   }
+
+  @Test("the multi-frame lastFrame guard message states the fact only, no dev-process wording")
+  func lastFrameGuardMessageHasNoDevProcessWording() async throws {
+    var configuration = MockSane.Configuration.default
+    configuration.lastFrameOverride = false
+    let mock = MockSane(configuration: configuration)
+    let session = ScanSession(
+      deviceID: configuration.devices[0].name, backend: mock, runner: SaneRunner())
+    let config = ScanConfiguration(mode: .gray, requestedDPI: 100)
+
+    do {
+      for try await _ in session.scan(config: config) {}
+      Issue.record("expected scan(config:) to throw")
+    } catch let error as ScanError {
+      #expect(!error.description.contains("escalate"))
+      #expect(!error.description.contains("Phase 3"))
+    }
+  }
 }

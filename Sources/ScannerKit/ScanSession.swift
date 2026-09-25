@@ -1,5 +1,17 @@
 import Foundation
 
+/// SANE well-known option names (saneopts.h) `ScanSession`'s negotiation depends on.
+private enum OptionName {
+  static let mode = "mode"
+  static let source = "source"
+  static let resolution = "resolution"
+  static let extendLampTimeout = "extend-lamp-timeout"
+  static let topLeftX = "tl-x"
+  static let topLeftY = "tl-y"
+  static let bottomRightX = "br-x"
+  static let bottomRightY = "br-y"
+}
+
 /// Drives one scan against one device: option negotiation, the SANE start/read loop, frame
 /// decoding, and cancellation. Construct one per scan (or per multi-page session — nothing
 /// here is single-use beyond the handle lifetime of a single `scan(config:)` call).
@@ -16,18 +28,6 @@ public struct ScanSession: Sendable {
     self.deviceID = deviceID
     self.backend = backend
     self.runner = runner
-  }
-
-  /// SANE well-known option names (saneopts.h) this negotiation depends on.
-  private enum OptionName {
-    static let mode = "mode"
-    static let source = "source"
-    static let resolution = "resolution"
-    static let extendLampTimeout = "extend-lamp-timeout"
-    static let topLeftX = "tl-x"
-    static let topLeftY = "tl-y"
-    static let bottomRightX = "br-x"
-    static let bottomRightY = "br-y"
   }
 
   /// Read chunk size for `sane_read`. Kept modest (not a giant single buffer) so
@@ -69,35 +69,19 @@ public struct ScanSession: Sendable {
     config: ScanConfiguration,
     continuation: AsyncThrowingStream<ScanEvent, Error>.Continuation
   ) async throws {
-    let handle = try await runner.run { try backend.open(deviceID) }
+    let handle: SaneHandle
+    do {
+      handle = try await runner.run { try backend.open(deviceID) }
+    } catch {
+      throw ErrorMapper.mapOpenFailure(error, deviceID: deviceID)
+    }
 
     do {
       let hardwareDPI = try await negotiateOptions(
         handle: handle, backend: backend, runner: runner, config: config)
-
-      // `sane_get_parameters` is only guaranteed accurate *after* `sane_start`: before start,
-      // `lines` may be -1 (unknown — legal for some sources) or an estimate, and the geometry
-      // can be revised at start. So start first, then read the parameters that actually drive
-      // allocation and decoding, rather than trusting pre-start values (a pre-start `lines ==
-      // -1` would trap the lineart intermediate buffer's `repeating:count:` allocation).
-      try await runner.run { try backend.start(handle) }
-      let params = try await runner.run { try backend.parameters(handle) }
-
-      guard params.lastFrame else {
-        throw ScanError.ioError(
-          "hp5590 emitted a multi-frame scan (last_frame=false after the first frame) — "
-            + "unsupported; escalate per Phase 3 spec rather than guessing a decoder."
-        )
-      }
-
-      // Defence-in-depth against a non-conformant backend: negative dimensions would trap the
-      // decode's buffer allocation and produce a bogus over-allocation for `reserveCapacity`.
-      guard params.pixelsPerLine >= 0, params.lines >= 0, params.bytesPerLine >= 0 else {
-        throw ScanError.ioError(
-          "device reported invalid frame dimensions (pixelsPerLine=\(params.pixelsPerLine), "
-            + "lines=\(params.lines), bytesPerLine=\(params.bytesPerLine))"
-        )
-      }
+      try Task.checkCancellation()
+      let params = try await startAndValidateParams(
+        handle: handle, backend: backend, runner: runner)
 
       let widthMM = Double(params.pixelsPerLine) / Double(hardwareDPI) * 25.4
       let heightMM = Double(params.lines) / Double(hardwareDPI) * 25.4
@@ -135,12 +119,46 @@ public struct ScanSession: Sendable {
         )
       )
 
+      await runner.run { backend.cancel(handle) }
       await runner.run { backend.close(handle) }
     } catch {
       await runner.run { backend.cancel(handle) }
       await runner.run { backend.close(handle) }
       throw error
     }
+  }
+
+  /// Starts the scan and reads back the parameters that actually drive allocation and
+  /// decoding. `sane_get_parameters` is only guaranteed accurate *after* `sane_start`:
+  /// before start, `lines` may be -1 (unknown — legal for some sources) or an estimate, and
+  /// the geometry can be revised at start. So start first, then trust only the post-start
+  /// values (a pre-start `lines == -1` would trap the lineart intermediate buffer's
+  /// `repeating:count:` allocation).
+  private static func startAndValidateParams(
+    handle: SaneHandle,
+    backend: any SaneBackend,
+    runner: SaneRunner
+  ) async throws -> SaneParametersRecord {
+    try await runner.run { try backend.start(handle) }
+    let params = try await runner.run { try backend.parameters(handle) }
+
+    guard params.lastFrame else {
+      throw ScanError.ioError(
+        "hp5590 emitted a multi-frame scan (last_frame=false after the first frame) — "
+          + "unsupported."
+      )
+    }
+
+    // Defence-in-depth against a non-conformant backend: negative dimensions would trap the
+    // decode's buffer allocation and produce a bogus over-allocation for `reserveCapacity`.
+    guard params.pixelsPerLine >= 0, params.lines >= 0, params.bytesPerLine >= 0 else {
+      throw ScanError.ioError(
+        "device reported invalid frame dimensions (pixelsPerLine=\(params.pixelsPerLine), "
+          + "lines=\(params.lines), bytesPerLine=\(params.bytesPerLine))"
+      )
+    }
+
+    return params
   }
 
   /// Reads the started scan to EOF on the shared runner, yielding `.progress` as bytes
@@ -183,10 +201,25 @@ public struct ScanSession: Sendable {
     runner: SaneRunner,
     config: ScanConfiguration
   ) async throws -> Int {
-    let descriptors = try await runner.run { try backend.optionDescriptors(handle) }
+    var descriptors = try await runner.run { try backend.optionDescriptors(handle) }
 
     func index(named name: String) -> SaneOptionDescriptorRecord? {
       descriptors.first { $0.name == name }
+    }
+
+    // Applies a setOption call and, when the device reports SANE_INFO_RELOAD_OPTIONS,
+    // re-fetches descriptors before any later lookup — hp5590 raises `br-y`'s max when
+    // `source` becomes ADF, and that only shows up in a fresh descriptor fetch.
+    func setOption(
+      _ value: SaneOptionValue, at optionIndex: Int32
+    ) async throws -> SaneSetOptionResult {
+      let result = try await runner.run {
+        try backend.setOption(handle, index: optionIndex, value: value)
+      }
+      if result.reloadOptions {
+        descriptors = try await runner.run { try backend.optionDescriptors(handle) }
+      }
+      return result
     }
 
     // Mode is mandatory — every SANE backend has it, and without it we'd be scanning
@@ -194,27 +227,18 @@ public struct ScanSession: Sendable {
     guard let modeOption = index(named: OptionName.mode) else {
       throw ScanError.ioError("device has no '\(OptionName.mode)' option")
     }
-    _ = try await runner.run {
-      try backend.setOption(
-        handle, index: modeOption.index, value: .string(config.mode.saneModeName))
-    }
+    _ = try await setOption(.string(config.mode.saneModeName), at: modeOption.index)
 
     // Source is optional — not every device (or MockSane scenario) exposes it.
     if let sourceOption = index(named: OptionName.source) {
-      _ = try await runner.run {
-        try backend.setOption(
-          handle, index: sourceOption.index, value: .string(config.source.saneSourceName))
-      }
+      _ = try await setOption(.string(config.source.saneSourceName), at: sourceOption.index)
     }
 
     // Lamp timeout is optional too — only the real hp5590 exposes `extend-lamp-timeout`
     // today (confirmed via `scanimage -A`); MockSane and any future backend without it are
     // left alone rather than erroring, same pattern as `source` above.
     if let lampOption = index(named: OptionName.extendLampTimeout) {
-      _ = try await runner.run {
-        try backend.setOption(
-          handle, index: lampOption.index, value: .bool(config.extendLampTimeout))
-      }
+      _ = try await setOption(.bool(config.extendLampTimeout), at: lampOption.index)
     }
 
     guard let resolutionOption = index(named: OptionName.resolution) else {
@@ -223,9 +247,7 @@ public struct ScanSession: Sendable {
     let candidateDPI = ResolutionPolicy.hardwareDPI(for: config.requestedDPI)
     let requestedValue: SaneOptionValue =
       resolutionOption.type == .fixed ? .fixed(Double(candidateDPI)) : .int(Int32(candidateDPI))
-    let setResult = try await runner.run {
-      try backend.setOption(handle, index: resolutionOption.index, value: requestedValue)
-    }
+    let setResult = try await setOption(requestedValue, at: resolutionOption.index)
 
     var hardwareDPI = candidateDPI
     if setResult.inexact {

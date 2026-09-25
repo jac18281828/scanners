@@ -84,4 +84,22 @@ struct DiscoveryTests {
     #expect(first.first?.id == "hp5590:libusb:000:016")
     #expect(second.first?.id == "hp5590:libusb:000:018")
   }
+
+  @Test("INVAL from listDevices maps to ioError, not deviceNotFound")
+  func invalidListDevicesMapsToIOError() async throws {
+    var configuration = MockSane.Configuration.default
+    configuration.listDevicesFailure = .invalid
+    let mock = MockSane(configuration: configuration)
+    let discovery = ScannerDiscovery(backend: mock, runner: SaneRunner())
+
+    do {
+      _ = try await discovery.devices()
+      Issue.record("expected devices() to throw")
+    } catch let error as ScanError {
+      guard case .ioError = error else {
+        Issue.record("expected .ioError, got \(error)")
+        return
+      }
+    }
+  }
 }

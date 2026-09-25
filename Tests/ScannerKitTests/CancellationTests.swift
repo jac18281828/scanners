@@ -71,17 +71,21 @@ struct CancellationTests {
     // cleanup on the SaneRunner queue yet. Poll briefly for that to land instead of
     // assuming it already has.
     var attempts = 0
-    while mock.cancelCallCount == 0 && attempts < 50 {
+    while mock.cancelCallCountForTesting() == 0 && attempts < 50 {
       try await Task.sleep(for: .milliseconds(10))
       attempts += 1
     }
 
     #expect(sawStarted)
-    #expect(mock.cancelCallCount > 0)
+    #expect(mock.cancelCallCountForTesting() > 0)
+
+    // Both a cancelled and a completed scan call `cancel`; never reaching EOF is what
+    // distinguishes this cancellation from a completion.
+    #expect(mock.readEOFCountForTesting() == 0)
   }
 
-  @Test("a scan that completes before cancellation never calls backend.cancel")
-  func completedScanDoesNotCallCancel() async throws {
+  @Test("a completed scan calls backend.cancel then backend.close exactly once, after EOF")
+  func completedScanCallsCancelOnce() async throws {
     let mock = MockSane()
     let session = ScanSession(
       deviceID: MockSane.Configuration.default.devices[0].name,
@@ -92,6 +96,64 @@ struct CancellationTests {
 
     for try await _ in session.scan(config: config) {}
 
-    #expect(mock.cancelCallCount == 0)
+    #expect(mock.cancelCallCountForTesting() == 1)
+    #expect(mock.readEOFCountForTesting() > 0)
+    #expect(mock.teardownLogForTesting() == ["cancel", "close"])
+  }
+
+  @Test("a task cancelled during option negotiation never calls backend.start")
+  func cancellationDuringNegotiationSkipsStart() async throws {
+    let taskBox = CancellingTaskBox()
+    var configuration = MockSane.Configuration.default
+    configuration.onOptionDescriptors = { taskBox.cancelWhenReady() }
+    let mock = MockSane(configuration: configuration)
+    let session = ScanSession(
+      deviceID: configuration.devices[0].name,
+      backend: mock,
+      runner: SaneRunner()
+    )
+    let config = ScanConfiguration(mode: .gray, requestedDPI: 100)
+
+    let task = Task {
+      do {
+        for try await _ in session.scan(config: config) {}
+      } catch {
+        // Cancellation surfaces as ScanError.cancelled or CancellationError — either is
+        // expected here.
+      }
+    }
+    taskBox.store(task)
+    await task.value
+
+    // `task.value` only guarantees the consuming for-await loop stopped, not that the
+    // producer-side inner task has reached its `backend.cancel()`/`close()` cleanup on the
+    // SaneRunner queue yet — poll briefly for that to land instead of assuming it already has.
+    var attempts = 0
+    while mock.teardownLogForTesting().count < 2 && attempts < 50 {
+      try await Task.sleep(for: .milliseconds(10))
+      attempts += 1
+    }
+
+    #expect(mock.startCallCountForTesting() == 0)
+    #expect(mock.teardownLogForTesting() == ["cancel", "close"])
+  }
+}
+
+/// Bridges the driving `Task`'s handle into `MockSane.Configuration.onOptionDescriptors`,
+/// a synchronous hook fired from `SaneRunner`'s dedicated queue rather than the concurrency
+/// pool, so blocking there on `store(_:)` is safe. This makes cancellation land at a fixed
+/// point during negotiation regardless of how the driving `Task` happens to get scheduled.
+private final class CancellingTaskBox: @unchecked Sendable {
+  private let semaphore = DispatchSemaphore(value: 0)
+  private var task: Task<Void, Never>?
+
+  func store(_ task: Task<Void, Never>) {
+    self.task = task
+    semaphore.signal()
+  }
+
+  func cancelWhenReady() {
+    semaphore.wait()
+    task?.cancel()
   }
 }
