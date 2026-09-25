@@ -7,10 +7,10 @@ on:
       - main
   push:
     branches:
-      - "*"
+      - "**"
 
 jobs:
-  run-commitlint-on-pull-request:
+  run-commitlint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,5 +25,26 @@ jobs:
       - name: Install dependencies
         run: npm install -g @commitlint/{cli,config-conventional}
 
-      - name: Validate all commits from PR
-        run: npx commitlint --from HEAD~${{ github.event.pull_request.commits }} --to HEAD --verbose
+      - name: Resolve commit range and validate
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            FROM="${{ github.event.pull_request.base.sha }}"
+            TO="${{ github.event.pull_request.head.sha }}"
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            BEFORE="${{ github.event.before }}"
+            AFTER="${{ github.event.after }}"
+            TO="$AFTER"
+            if [[ "$BEFORE" =~ ^0+$ ]] || [[ "${{ github.event.forced }}" == "true" ]]; then
+              FROM="origin/main"
+            else
+              FROM="$BEFORE"
+            fi
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            FROM="HEAD~1"
+            TO="HEAD"
+          else
+            echo "unhandled event: ${{ github.event_name }}" >&2
+            exit 1
+          fi
+          echo "range: ${FROM}..${TO}"
+          npx commitlint --from "$FROM" --to "$TO" --verbose
