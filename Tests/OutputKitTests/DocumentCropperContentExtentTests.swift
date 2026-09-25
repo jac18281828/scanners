@@ -145,4 +145,29 @@ struct DocumentCropperContentExtentTests {
     #expect(
       result.image.height < height, "expected a content-based crop, got the untouched full bed")
   }
+
+  @Test(
+    "contentExtentCrop keeps an 8-bit gray source gray -- format only, since it delegates to boundingBoxCrop for the crop itself"
+  )
+  func cropKeepsGrayFormat() throws {
+    let width = 300
+    let height = 400
+    let image = Self.grayscaleImage(width: width, height: height, background: 0.95) { context in
+      context.setFillColor(gray: 0.1, alpha: 1)
+      context.fill(CGRect(x: 100, y: 100, width: 100, height: 150))
+    }
+    let hardwareDPI = 300
+    let page = ScannedPage(
+      image: image, widthMM: Double(width) / Double(hardwareDPI) * 25.4,
+      heightMM: Double(height) / Double(hardwareDPI) * 25.4, requestedDPI: hardwareDPI,
+      hardwareDPI: hardwareDPI, mode: .gray)
+
+    let result = DocumentCropper.contentExtentCrop(page)
+    #expect(
+      result.image.width < width || result.image.height < height,
+      "should still be cropped smaller than the full canvas")
+    #expect(result.image.colorSpace?.model == .monochrome)
+    #expect(result.image.bitsPerComponent == 8)
+    #expect(result.image.bitsPerPixel == 8)
+  }
 }

@@ -84,7 +84,7 @@ public enum DocumentExporter {
       let url = SavePanel.presentPDFPanel(suggestedName: suggested, directory: settings.saveFolder)
     else { return nil }
     let data = try buildPDFData(session: session, settings: settings)
-    try data.write(to: url)
+    try data.write(to: url, options: .atomic)
     session.markSaved()
     settings.saveFolder = url.deletingLastPathComponent()
     return url
@@ -133,7 +133,7 @@ public enum DocumentExporter {
         defaultFormat: defaultFormat)
     else { return nil }
     let data = try format.encode(entry.page)
-    try data.write(to: url)
+    try data.write(to: url, options: .atomic)
     session.markSaved()
     settings.saveFolder = url.deletingLastPathComponent()
     return url

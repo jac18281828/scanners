@@ -132,6 +132,32 @@ struct PDFBuilderTests {
     #expect(collapsed.contains("PRECOMPUTEDSENTINEL"))
   }
 
+  @Test(
+    "append does every fallible step before beginPDFPage -- a throwing append leaves the document and pageCount unchanged"
+  )
+  func throwingAppendLeavesDocumentUnchanged() throws {
+    let builder = try PDFBuilder()
+    let goodSize = Fixtures.PageSize(
+      widthPixels: 100, heightPixels: 100, widthMM: 25.4, heightMM: 25.4)
+    let goodPage = Fixtures.solidPage(size: goodSize, requestedDPI: 100, hardwareDPI: 100)
+    try builder.append(page: goodPage)
+    #expect(builder.pageCount == 1)
+
+    // A 1x1 page: Vision's text-recognition request rejects an image this small, so
+    // `OCREngine.recognizeLines` throws.
+    let tinySize = Fixtures.PageSize(
+      widthPixels: 1, heightPixels: 1, widthMM: 0.254, heightMM: 0.254)
+    let tinyPage = Fixtures.solidPage(size: tinySize, requestedDPI: 100, hardwareDPI: 100)
+    #expect(throws: (any Error).self) {
+      try builder.append(page: tinyPage, includeOCRTextLayer: true, ocrRecognitionLevel: .fast)
+    }
+    #expect(builder.pageCount == 1, "a throwing append must not commit a half-begun page")
+
+    let data = builder.finish()
+    let document = try #require(PDFDocument(data: data))
+    #expect(document.pageCount == 1, "the half-begun page from the throwing append must not appear")
+  }
+
   @Test("finish() can only be called once meaningfully; append after finish throws")
   func appendAfterFinishThrows() throws {
     let builder = try PDFBuilder()

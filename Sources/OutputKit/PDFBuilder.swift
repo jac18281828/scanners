@@ -101,19 +101,21 @@ public final class PDFBuilder {
           bytes: &mediaBox, length: MemoryLayout<CGRect>.size)
       ] as CFDictionary
 
-    context.beginPDFPage(pageInfo)
-
+    // Every fallible step (image compression, OCR) runs before `beginPDFPage` — a throw here
+    // leaves the document and `pageCount` unchanged, rather than committing a half-drawn page.
     let embeddedImage = try compressedImage(for: normalized)
-    context.draw(embeddedImage, in: CGRect(x: 0, y: 0, width: widthPt, height: heightPt))
-
-    if includeOCRTextLayer {
-      let lines =
-        try precomputedOCRLines
+    let lines: [OCRTextLine]? =
+      includeOCRTextLayer
+      ? try precomputedOCRLines
         ?? OCREngine.recognizeLines(
           in: normalized.image, language: ocrLanguage, recognitionLevel: ocrRecognitionLevel)
+      : nil
+
+    context.beginPDFPage(pageInfo)
+    context.draw(embeddedImage, in: CGRect(x: 0, y: 0, width: widthPt, height: heightPt))
+    if let lines {
       drawInvisibleText(lines, context: context, pageWidthPt: widthPt, pageHeightPt: heightPt)
     }
-
     context.endPDFPage()
     pageCount += 1
   }

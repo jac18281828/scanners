@@ -263,6 +263,32 @@ public enum DocumentCropper {
   /// the SDK — `crop` runs on a detached task, one page at a time.
   nonisolated(unsafe) static let sharedCIContext = CIContext()
 
+  /// Renders `ciImage` at `rect` through `sharedCIContext`, in `source`'s own color model and
+  /// bit depth rather than the context's default (8-bit RGBA) — otherwise an 8-bit DeviceGray
+  /// page comes back 32-bit RGB: gray PNGs balloon, and PDF gray pages embed as 3-channel JPEG.
+  /// A color model other than gray or RGB (CMYK, Lab, indexed, ...) falls back to 8-bit RGBA
+  /// in sRGB, rather than pairing a mismatched format and color space, which `createCGImage`
+  /// rejects outright (`nil`) — so an unexpected model still crops instead of failing.
+  static func render(_ ciImage: CIImage, from rect: CGRect, matching source: CGImage) -> CGImage? {
+    let sourceColorSpace = source.colorSpace
+    let is16Bit = source.bitsPerComponent > 8
+    let format: CIFormat
+    let colorSpace: CGColorSpace
+    switch sourceColorSpace?.model {
+    case .monochrome:
+      format = is16Bit ? .L16 : .L8
+      colorSpace = sourceColorSpace!
+    case .rgb:
+      format = is16Bit ? .RGBA16 : .RGBA8
+      colorSpace = sourceColorSpace!
+    default:
+      format = .RGBA8
+      colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+    }
+    return sharedCIContext.createCGImage(
+      ciImage, from: rect, format: format, colorSpace: colorSpace)
+  }
+
   // MARK: - Bounding-box crop
 
   /// Crops to the quad's axis-aligned bounding box — no rotation, no warp. Used when `decide`
@@ -280,7 +306,7 @@ public enum DocumentCropper {
     let cropRect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
       .intersection(imageExtent)
     guard !cropRect.isEmpty else { return nil }
-    return sharedCIContext.createCGImage(CIImage(cgImage: image), from: cropRect)
+    return render(CIImage(cgImage: image), from: cropRect, matching: image)
   }
 
   // MARK: - Perspective correction
@@ -296,6 +322,6 @@ public enum DocumentCropper {
     filter.setValue(CIVector(cgPoint: corners.bottomLeft), forKey: "inputBottomLeft")
     filter.setValue(CIVector(cgPoint: corners.bottomRight), forKey: "inputBottomRight")
     guard let outputImage = filter.outputImage else { return nil }
-    return sharedCIContext.createCGImage(outputImage, from: outputImage.extent)
+    return render(outputImage, from: outputImage.extent, matching: image)
   }
 }

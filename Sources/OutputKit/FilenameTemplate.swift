@@ -23,6 +23,8 @@ public enum FilenameTemplate {
   }
 
   /// Returns the next non-colliding filename for `date`, e.g. `scan-2026-07-22-001.pdf`.
+  /// The date is formatted in `calendar`'s own time zone, not forced to UTC — a scan taken
+  /// near local midnight gets the day it was actually taken on.
   /// `existingFilenames` should be exactly what's in the target directory (full names with
   /// extensions) — compared case-insensitively to match the default APFS volume, so pass the
   /// real directory listing.
@@ -36,10 +38,9 @@ public enum FilenameTemplate {
     ext: String,
     existingFilenames: Set<String>,
     calendar: Calendar = .current,
-    timeZone: TimeZone = TimeZone(identifier: "UTC")!,
     prefix: String = "scan"
   ) throws -> String {
-    let dateString = formattedDate(date, calendar: calendar, timeZone: timeZone)
+    let dateString = formattedDate(date, calendar: calendar)
     let safePrefix = sanitizedPrefix(prefix)
     // Compare case-insensitively: the default macOS (APFS) volume is case-insensitive, so an
     // existing `scan-...-001.PDF` collides on disk with a candidate `scan-...-001.pdf` even
@@ -74,12 +75,8 @@ public enum FilenameTemplate {
     return trimmed.isEmpty ? "scan" : trimmed
   }
 
-  private static func formattedDate(
-    _ date: Date, calendar: Calendar, timeZone: TimeZone
-  ) -> String {
-    var utcCalendar = calendar
-    utcCalendar.timeZone = timeZone
-    let components = utcCalendar.dateComponents([.year, .month, .day], from: date)
+  private static func formattedDate(_ date: Date, calendar: Calendar) -> String {
+    let components = calendar.dateComponents([.year, .month, .day], from: date)
     let year = components.year ?? 0
     let month = components.month ?? 0
     let day = components.day ?? 0
